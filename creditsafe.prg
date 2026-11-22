@@ -140,16 +140,17 @@ STATIC PROCEDURE MenuPrincipal()
                   "2. Mettre en surveillance les debiteurs", ;
                   "3. Recuperer les alertes", ;
                   "4. Bilan du fichier de suivi", ;
-                  "5. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
-                  "6. Nombre maximum de debiteurs a traiter", ;
-                  "7. Modifier les parametres (Bloc-notes)", ;
-                  "8. Consulter le journal (Bloc-notes)", ;
+                  "5. Debiteurs a verifier (A_VERIFIER)", ;
+                  "6. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
+                  "7. Nombre maximum de debiteurs a traiter", ;
+                  "8. Modifier les parametres (Bloc-notes)", ;
+                  "9. Consulter le journal (Bloc-notes)", ;
                   "0. Quitter" }
-      @ 21, 8 SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
+      @ 22, 8 SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
       nChoix := ChoixMenu( aItems, 10, 8, 52, nChoix )
 
       DO CASE
-      CASE nChoix == 0 .OR. nChoix == 9 .OR. s_lFermer
+      CASE nChoix == 0 .OR. nChoix == 10 .OR. s_lFermer
          lFin := .T.
          nChoix := 1
       CASE nChoix == 1
@@ -164,6 +165,8 @@ STATIC PROCEDURE MenuPrincipal()
       CASE nChoix == 4
          BilanSuivi()
       CASE nChoix == 5
+         ListeAVerifier()
+      CASE nChoix == 6
          IF s_lSimul
             IF Confirme( "Passer en mode REEL (les societes seront vraiment ajoutees) ?" )
                CfgSession( "GENERAL", "SIMULATION", "0" )
@@ -171,11 +174,11 @@ STATIC PROCEDURE MenuPrincipal()
          ELSE
             CfgSession( "GENERAL", "SIMULATION", "1" )
          ENDIF
-      CASE nChoix == 6
-         SaisieMaxDebiteurs()
       CASE nChoix == 7
-         ModifieParametres()
+         SaisieMaxDebiteurs()
       CASE nChoix == 8
+         ModifieParametres()
+      CASE nChoix == 9
          OuvreBlocNotes( CheminFichier( Cfg( "GENERAL", "FICHIER_LOG", "creditsafe.log" ) ) )
       ENDCASE
    ENDDO
@@ -239,16 +242,12 @@ STATIC FUNCTION ChoixMenu( aItems, nLig, nCol, nLarg, nChoix )
    nDefaut  : bouton choisi par Entree. */
 STATIC FUNCTION Boutons( cMsg, aBoutons, aTouches, nDefaut )
 
-   LOCAL aPos := {}, nCol := 2, i, nTouche, c, cCoul := SetColor()
+   LOCAL aPos, i, nTouche, c, cCoul := SetColor()
 
    hb_default( @nDefaut, 1 )
    @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
    @ LIG_BOUTONS, 2 SAY Left( cMsg, MaxCol() - 3 )
-   FOR EACH c IN aBoutons
-      AAdd( aPos, nCol )
-      @ LIG_BOUTONS + 1, nCol SAY " " + c + " " COLOR COUL_BOUTON
-      nCol += Len( c ) + 4
-   NEXT
+   aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
    CLEAR TYPEAHEAD
    DO WHILE .T.
       nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
@@ -258,15 +257,8 @@ STATIC FUNCTION Boutons( cMsg, aBoutons, aTouches, nDefaut )
          i := 0
          EXIT
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
-         IF MRow() == LIG_BOUTONS + 1
-            FOR i := 1 TO Len( aBoutons )
-               IF MCol() >= aPos[ i ] .AND. MCol() < aPos[ i ] + Len( aBoutons[ i ] ) + 2
-                  EXIT
-               ENDIF
-            NEXT
-            IF i <= Len( aBoutons )
-               EXIT
-            ENDIF
+         IF ( i := BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 ) ) > 0
+            EXIT
          ENDIF
       CASE nTouche >= 1000     /* autres evenements (focus, redimensionnement...) */
          LOOP
@@ -291,6 +283,34 @@ STATIC FUNCTION Boutons( cMsg, aBoutons, aTouches, nDefaut )
    @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
 
    RETURN i
+
+/* Dessine une rangee de boutons a partir de la colonne 2 ; renvoie la colonne de chaque bouton */
+STATIC FUNCTION DessineBoutons( aBoutons, nLig )
+
+   LOCAL aPos := {}, nCol := 2, c
+
+   FOR EACH c IN aBoutons
+      AAdd( aPos, nCol )
+      @ nLig, nCol SAY " " + c + " " COLOR COUL_BOUTON
+      nCol += Len( c ) + 4
+   NEXT
+
+   RETURN aPos
+
+/* Numero du bouton sous la souris (0 si aucun) */
+STATIC FUNCTION BoutonClique( aBoutons, aPos, nLig )
+
+   LOCAL i
+
+   IF MRow() == nLig
+      FOR i := 1 TO Len( aBoutons )
+         IF MCol() >= aPos[ i ] .AND. MCol() < aPos[ i ] + Len( aBoutons[ i ] ) + 2
+            RETURN i
+         ENDIF
+      NEXT
+   ENDIF
+
+   RETURN 0
 
 /* Attend un clic sur le bouton ou une touche */
 STATIC PROCEDURE Attente( cMsg, cBouton )
@@ -416,6 +436,239 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
 
    RETURN
 
+/* ==========================================================================
+ *  DEBITEURS A VERIFIER
+ *  Derniere ligne de chaque debiteur (par mode) dont le statut est A_VERIFIER.
+ *  Liste a la souris (clic = detail, molette = defilement), detail avec copie du SIREN.
+ * ========================================================================== */
+#define LV_HAUT   3              /* premiere ligne de la liste */
+#define LV_NB     18             /* nombre de lignes affichees */
+
+STATIC PROCEDURE ListeAVerifier()
+
+   LOCAL aListe, nSel := 1, nHaut := 1, nTouche, i, nLig, aPos, lFin := .F., cMsg := ""
+   LOCAL aBoutons := { "Detail", "Copier le SIREN", "Actualiser", "Retour au menu" }
+
+   aListe := LitAVerifier( @cMsg )
+   SetColor( "W/N" )
+   DO WHILE ! lFin .AND. ! s_lFermer
+      CLS
+      @ 0, 1 SAY "DEBITEURS A VERIFIER : " + hb_ntos( Len( aListe ) ) + iif( Empty( cMsg ), "", "   " + cMsg )
+      @ 1, 1 SAY "M CA       Debiteur              CP    Proposition Creditsafe  SIREN     Note"
+      @ 2, 1 SAY Replicate( "-", 78 )
+      IF Empty( aListe )
+         @ LV_HAUT + 1, 3 SAY "Aucun debiteur A_VERIFIER dans le fichier de suivi."
+      ENDIF
+      nSel  := Max( 1, Min( nSel, Len( aListe ) ) )
+      nHaut := Max( 1, Min( nHaut, nSel ) )
+      IF nSel >= nHaut + LV_NB
+         nHaut := nSel - LV_NB + 1
+      ENDIF
+      FOR i := nHaut TO Min( Len( aListe ), nHaut + LV_NB - 1 )
+         @ LV_HAUT + i - nHaut, 0 SAY PadR( LigneAVerifier( aListe[ i ] ), MaxCol() + 1 ) ;
+            COLOR iif( i == nSel, COUL_CHOIX, "W/N" )
+      NEXT
+      IF Len( aListe ) > LV_NB
+         @ LV_HAUT + LV_NB, 1 SAY "Lignes " + hb_ntos( nHaut ) + " a " + hb_ntos( Min( Len( aListe ), nHaut + LV_NB - 1 ) ) + ;
+            " sur " + hb_ntos( Len( aListe ) ) + " - molette ou PgUp/PgDn pour defiler"
+      ENDIF
+      @ LIG_BOUTONS, 2 SAY "Clic sur une ligne pour le detail.  M : R = reel, S = simulation"
+      aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
+
+      nTouche := Inkey( 0, HB_INKEY_ALL )
+      nLig := MRow() - LV_HAUT + nHaut
+      DO CASE
+      CASE nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+      CASE nTouche == K_ESC .OR. nTouche == K_RBUTTONDOWN
+         lFin := .T.
+      CASE nTouche == K_UP
+         nSel--
+      CASE nTouche == K_DOWN
+         nSel++
+      CASE nTouche == K_PGUP .OR. nTouche == K_MWFORWARD
+         nSel  -= iif( nTouche == K_PGUP, LV_NB, 3 )
+         nHaut -= iif( nTouche == K_PGUP, LV_NB, 3 )
+      CASE nTouche == K_PGDN .OR. nTouche == K_MWBACKWARD
+         nSel  += iif( nTouche == K_PGDN, LV_NB, 3 )
+         nHaut += iif( nTouche == K_PGDN, LV_NB, 3 )
+         nHaut := Min( nHaut, Max( 1, Len( aListe ) - LV_NB + 1 ) )
+      CASE nTouche == K_HOME
+         nSel := 1
+      CASE nTouche == K_END
+         nSel := Len( aListe )
+      CASE nTouche == K_MOUSEMOVE
+         IF MRow() >= LV_HAUT .AND. MRow() < LV_HAUT + LV_NB .AND. nLig <= Len( aListe )
+            nSel := nLig
+         ENDIF
+      CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
+         IF MRow() >= LV_HAUT .AND. MRow() < LV_HAUT + LV_NB .AND. nLig <= Len( aListe )
+            nSel := nLig
+            DetailAVerifier( aListe[ nSel ] )
+         ELSE
+            SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
+            CASE 1
+               IF ! Empty( aListe )
+                  DetailAVerifier( aListe[ nSel ] )
+               ENDIF
+               EXIT
+            CASE 2
+               IF ! Empty( aListe )
+                  CopieSiren( aListe[ nSel ] )
+               ENDIF
+               EXIT
+            CASE 3
+               aListe := LitAVerifier( @cMsg )
+               EXIT
+            CASE 4
+               lFin := .T.
+               EXIT
+            ENDSWITCH
+         ENDIF
+      CASE nTouche == K_ENTER
+         IF ! Empty( aListe )
+            DetailAVerifier( aListe[ nSel ] )
+         ENDIF
+      ENDCASE
+   ENDDO
+   SetColor( COUL_MENU )
+
+   RETURN
+
+/* Lit le suivi : derniere ligne de chaque debiteur (par mode) dont le statut est A_VERIFIER */
+STATIC FUNCTION LitAVerifier( cMsg )
+
+   LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_SUIVI", "CsSuivi.dbf" ) )
+   LOCAL hDernier := { => }, aListe := {}, lOk := .T., h, k
+
+   cMsg := ""
+   IF ! hb_FileExists( cFic )
+      cMsg := "(fichier de suivi introuvable)"
+      RETURN {}
+   ENDIF
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      dbUseArea( .T., "SIXCDX", cFic, "AVERIF", .T., .T., CdpDbf() )
+   RECOVER
+      lOk := .F.
+   END SEQUENCE
+   IF ! lOk
+      cMsg := "(impossible d'ouvrir " + cFic + ")"
+      RETURN {}
+   ENDIF
+   AVERIF->( ordSetFocus( 0 ) )
+   AVERIF->( dbGoTop() )
+   DO WHILE ! AVERIF->( Eof() )
+      IF AllTrim( AVERIF->STATUT ) == "A_VERIFIER"
+         h := { => }
+         FOR EACH k IN { "MODE", "DATE_TRT", "CA", "NOM_DEB", "ADR_DEB", "CP_DEB", "VILLE_DEB", "SIREN", ;
+                         "CS_NOM", "CS_ADRESSE", "CS_CP", "CS_VILLE", "CS_STATUT", "CS_TYPE", "CS_ID", ;
+                         "SCORE", "NB_RESULT", "PORTF_NOM", "MESSAGE" }
+            h[ k ] := ChampSuivi( k )
+         NEXT
+         hDernier[ AllTrim( AVERIF->MODE ) + "|" + AVERIF->SERIE + AVERIF->SIREN_ORI ] := h
+      ELSE
+         /* traite depuis (ajoute, introuvable...) : n'est plus a verifier */
+         hb_HDel( hDernier, AllTrim( AVERIF->MODE ) + "|" + AVERIF->SERIE + AVERIF->SIREN_ORI )
+      ENDIF
+      AVERIF->( dbSkip() )
+   ENDDO
+   AVERIF->( dbCloseArea() )
+
+   FOR EACH h IN hDernier
+      AAdd( aListe, h )
+   NEXT
+   /* reel d'abord, puis par CA */
+   ASort( aListe,,, {| x, y | iif( x[ "MODE" ] == y[ "MODE" ], x[ "CA" ] < y[ "CA" ], x[ "MODE" ] == "REEL" ) } )
+
+   RETURN aListe
+
+/* Valeur d'un champ du suivi (vide si le champ n'existe pas dans un ancien fichier) */
+STATIC FUNCTION ChampSuivi( cChamp )
+
+   LOCAL nPos := AVERIF->( FieldPos( cChamp ) ), x
+
+   IF nPos == 0
+      RETURN ""
+   ENDIF
+   x := AVERIF->( FieldGet( nPos ) )
+
+   RETURN iif( HB_ISSTRING( x ), AllTrim( x ), x )
+
+STATIC FUNCTION LigneAVerifier( h )
+
+   RETURN " " + Left( h[ "MODE" ], 1 ) + " " + PadR( h[ "CA" ], 8 ) + " " + PadR( h[ "NOM_DEB" ], 21 ) + " " + ;
+          PadR( h[ "CP_DEB" ], 5 ) + " " + PadR( h[ "CS_NOM" ], 23 ) + " " + PadR( h[ "SIREN" ], 9 ) + " " + ;
+          Str( iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 ), 4 )
+
+/* Detail d'un debiteur a verifier */
+STATIC PROCEDURE DetailAVerifier( h )
+
+   LOCAL aBoutons := { "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
+   LOCAL cMsg := h[ "MESSAGE" ], nP
+
+   DO WHILE ! lFin .AND. ! s_lFermer
+      CLS
+      @  0, 1 SAY "DETAIL DU DEBITEUR A VERIFIER" + "   (" + h[ "MODE" ] + ", traite le " + DToC( h[ "DATE_TRT" ] ) + ")"
+      @  1, 1 SAY Replicate( "-", 78 )
+      @  2, 1 SAY "Debiteur"
+      @  3, 3 SAY "CA            : " + h[ "CA" ]
+      @  4, 3 SAY "Nom           : " + h[ "NOM_DEB" ]
+      @  5, 3 SAY "Adresse       : " + h[ "ADR_DEB" ]
+      @  6, 3 SAY "              : " + h[ "CP_DEB" ] + " " + h[ "VILLE_DEB" ]
+      @  8, 1 SAY "Societe proposee par Creditsafe"
+      @  9, 3 SAY "Nom           : " + h[ "CS_NOM" ]
+      @ 10, 3 SAY "SIREN         : " + h[ "SIREN" ] COLOR "W+/N"
+      @ 11, 3 SAY "Adresse       : " + Left( h[ "CS_ADRESSE" ], 60 )
+      @ 12, 3 SAY "              : " + h[ "CS_CP" ] + " " + h[ "CS_VILLE" ]
+      @ 13, 3 SAY "Etat, type    : " + h[ "CS_STATUT" ] + iif( Empty( h[ "CS_TYPE" ] ), "", ", " + h[ "CS_TYPE" ] )
+      @ 14, 3 SAY "Note          : " + hb_ntos( iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 ) ) + " / 100" + ;
+                  "   (" + hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s))"
+      @ 16, 1 SAY "Message de la recherche"
+      /* le message contient la 2e societe apres "|" : une ligne par societe */
+      nP := At( "|", cMsg )
+      IF nP > 0
+         @ 17, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), 76 )
+         @ 18, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), 76 )
+      ELSE
+         @ 17, 3 SAY Left( cMsg, 76 )
+         @ 18, 3 SAY SubStr( cMsg, 77, 76 )
+      ENDIF
+      @ 20, 1 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs ;"
+      @ 21, 1 SAY "au prochain passage, le debiteur sera mis en surveillance par son SIREN."
+      aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
+
+      nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
+      DO CASE
+      CASE nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+      CASE nTouche == K_ESC .OR. nTouche == K_ENTER
+         lFin := .T.
+      CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
+         SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
+         CASE 1
+            CopieSiren( h )
+            EXIT
+         CASE 2
+            lFin := .T.
+            EXIT
+         ENDSWITCH
+      ENDCASE
+   ENDDO
+
+   RETURN
+
+/* Copie le SIREN propose dans le presse-papiers */
+STATIC PROCEDURE CopieSiren( h )
+
+   IF Empty( h[ "SIREN" ] )
+      Attente( "Pas de SIREN pour cette proposition.", "OK" )
+   ELSE
+      hb_gtInfo( HB_GTI_CLIPBOARDDATA, h[ "SIREN" ] )
+      Attente( "SIREN " + h[ "SIREN" ] + " copie dans le presse-papiers (Ctrl+V pour le coller).", "OK" )
+   ENDIF
+
+   RETURN
+
 /* Situation des debiteurs d'apres le fichier de suivi : dernier statut de chaque debiteur, par mode */
 STATIC PROCEDURE BilanSuivi()
 
@@ -476,7 +729,7 @@ STATIC PROCEDURE BilanSuivi()
          QOut( "Dont " + hb_ntos( nNom ) + " debiteur(s) traite(s) en REEL par nom + adresse." )
          nLigne := AScan( aStatuts, {| x | x == "A_VERIFIER" } )
          IF nLigne > 0
-            QOut( "A_VERIFIER : controler CS_NOM / SIREN dans le suivi, puis reporter le SIREN dans les debiteurs." )
+            QOut( "A_VERIFIER : voir le choix 5 du menu, puis reporter le SIREN dans les debiteurs." )
          ENDIF
       ENDIF
    ENDIF
@@ -2070,9 +2323,12 @@ STATIC PROCEDURE PrepareArret()
 
 STATIC FUNCTION DemandeArret()
 
-   LOCAL nTouche, cFic := FichierArret()
+   LOCAL nTouche, cFic := FichierArret(), nLus := 0
 
-   DO WHILE ( nTouche := Inkey( , INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT ) ) != 0
+   /* au plus 50 evenements par appel : sans clavier (entree redirigee), certains terminaux
+      renvoient sans fin le meme evenement. Evenements de fenetre (croix) : en mode menu seulement */
+   DO WHILE ++nLus <= 50 .AND. ;
+      ( nTouche := Inkey( , INKEY_KEYBOARD + INKEY_LDOWN + iif( s_lMenu, HB_INKEY_GTEVENT, 0 ) ) ) != 0
       IF nTouche == HB_K_CLOSE
          s_lFermer := .T.
          CsLog( "*** Interruption demandee (fermeture de la fenetre) ***" )
