@@ -86,6 +86,7 @@ gardé sous `CsSuivi_av.dbf` et ses enregistrements sont recopiés (le fichier d
 
 Avec `[RECHERCHE] PAR_NOM=1`, un débiteur sans SIREN est recherché par son nom (`[CHAMPS] NOM`) et son adresse
 (`[CHAMPS] ADRESSE`, `CP`, `VILLE`). Plusieurs champs peuvent être concaténés, par exemple `ADRESSE=ADR1+ADR2`.
+Pour le nom, `NOM=RS|NOM` prend le premier champ non vide : la raison sociale, sinon le nom.
 
 1. Il faut un nom et au moins un code postal ou une ville. Sinon le débiteur est ignoré, sauf avec `NOM_SEUL=1`
    (déconseillé : on obtient trop d'homonymes dans toute la France).

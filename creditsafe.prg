@@ -106,7 +106,7 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL lParNom   := Cfg( "RECHERCHE", "PAR_NOM", "0" ) == "1"
    LOCAL lNomSeul  := Cfg( "RECHERCHE", "NOM_SEUL", "0" ) == "1"
    LOCAL aPosAdr, aPosCP, aPosVille
-   LOCAL nPosSiren, nPosCA, nPosRela, nPosNom
+   LOCAL nPosSiren, nPosCA, nPosRela, aPosNom
    LOCAL cCA, cRela, cNom, xSiren, cSirenOri, cSiren, cSerie, cCle, cPortNom, cPortId
    LOCAL cAdr, cCP, cVille, lNom, lTrouve
    LOCAL hRes, nTraites := 0, k, xFiltre
@@ -132,7 +132,8 @@ STATIC PROCEDURE MiseEnSurveillance()
    nPosSiren := DEB->( FieldPos( cChSiren ) )
    nPosCA    := DEB->( FieldPos( cChCA ) )
    nPosRela  := DEB->( FieldPos( cChRela ) )
-   nPosNom   := DEB->( FieldPos( cChNom ) )
+   /* NOM=RS|NOM : premier champ non vide (raison sociale, sinon nom) */
+   aPosNom   := PosChamps( StrTran( cChNom, "|", "+" ), cFicDeb )
    IF ! Empty( cChLimite )
       nPosLim := DEB->( FieldPos( cChLimite ) )
    ENDIF
@@ -194,7 +195,7 @@ STATIC PROCEDURE MiseEnSurveillance()
 
       cCA   := iif( nPosCA   > 0, AllTrim( ToS( DEB->( FieldGet( nPosCA ) ) ) ), "" )
       cRela := iif( nPosRela > 0, AllTrim( ToS( DEB->( FieldGet( nPosRela ) ) ) ), "" )
-      cNom  := iif( nPosNom  > 0, AllTrim( ToS( DEB->( FieldGet( nPosNom ) ) ) ), "" )
+      cNom  := PremierChamp( aPosNom )
       xSiren := DEB->( FieldGet( nPosSiren ) )
 
       /* Serie = 2 premieres lettres de CA, sinon de CODERELA */
@@ -1657,6 +1658,20 @@ STATIC FUNCTION ValeurChamps( aPos )
    NEXT
 
    RETURN cRes
+
+/* Valeur du premier champ non vide parmi les positions donnees */
+STATIC FUNCTION PremierChamp( aPos )
+
+   LOCAL nPos, c
+
+   FOR EACH nPos IN aPos
+      c := AllTrim( ToS( DEB->( FieldGet( nPos ) ) ) )
+      IF ! Empty( c )
+         RETURN c
+      ENDIF
+   NEXT
+
+   RETURN ""
 
 STATIC FUNCTION NormaliseSiren( c )
 
