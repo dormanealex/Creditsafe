@@ -27,6 +27,27 @@ des portefeuilles, etc. Les identifiants peuvent être mis dans les variables d'
 
 `SIMULATION=1` est le réglage par défaut : le programme cherche les sociétés mais ne crée rien chez Creditsafe.
 
+## Fichiers DBF et index
+
+* Tous les DBF sont ouverts avec le RDD **SIXCDX** (index `.cdx` compatibles SIx Driver / Comix).
+* **Codepage des DBF : FR850** (`[GENERAL] CODEPAGE_DBF=FR850`). Harbour convertit automatiquement les données
+  vers le codepage du programme (`CODEPAGE=FRWIN`).
+* `DebSiren.dbf` est ouvert en partagé, en lecture seule. Son `.cdx` de production est ouvert s'il existe,
+  mais la lecture se fait dans l'ordre physique.
+* `CsSuivi.dbf` et `CsAlertes.dbf` sont créés avec un index de production `.cdx`. Les tags manquants sont
+  recréés automatiquement, ce qui demande que le fichier ne soit pas ouvert par un autre programme à ce moment-là :
+
+| Fichier | Tag | Clé |
+|---|---|---|
+| CsSuivi.cdx | CLE | `SERIE+SIREN_ORI` |
+| | SIREN | `SIREN` |
+| | CSID | `CS_ID` |
+| | PORTF | `PORTF_NOM+SIREN` |
+| CsAlertes.cdx | NOTIF | `NOTIF_ID` |
+| | SIREN | `SIREN+DTOS(D_EVT)` |
+| | DATE | `DTOS(D_EVT)` |
+| | CSID | `CS_ID` |
+
 ## Fonctionnement de `SURVEIL`
 
 1. Authentification : `POST /authenticate`, puis jeton `Bearer`, renouvelé automatiquement en cas de 401.

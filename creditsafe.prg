@@ -19,7 +19,7 @@
 REQUEST HB_CODEPAGE_FRWIN
 REQUEST HB_CODEPAGE_FR850
 REQUEST HB_CODEPAGE_FRISO
-REQUEST DBFNTX
+REQUEST SIXCDX
 
 #define CRLF  Chr( 13 ) + Chr( 10 )
 
@@ -42,7 +42,8 @@ PROCEDURE Main( cMode, cIni )
    SET CENTURY ON
    SET DELETED ON
    SET EXCLUSIVE OFF
-   rddSetDefault( "DBFNTX" )
+   SET AUTOPEN ON
+   rddSetDefault( "SIXCDX" )
 
    IF ! ChargeConfig( cIni )
       RETURN
@@ -98,7 +99,7 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL nPause    := Val( Cfg( "API", "PAUSE_MS", "250" ) ) / 1000
    LOCAL cPrefixe  := Cfg( "PORTEFEUILLE", "PREFIXE_NOM", "DEBITEURS-" )
    LOCAL cSerieDef := Cfg( "PORTEFEUILLE", "SERIE_PAR_DEFAUT", "ZZ" )
-   LOCAL bFiltre, hDeja, hVu := { => }, hPort, hStat := { => }
+   LOCAL bFiltre, hVu := { => }, hPort, hStat := { => }
    LOCAL nPosSiren, nPosCA, nPosRela, nPosNom
    LOCAL cCA, cRela, cNom, xSiren, cSirenOri, cSiren, cSerie, cCle, cPortNom, cPortId
    LOCAL hRes, nTraites := 0, k, xFiltre
@@ -111,18 +112,10 @@ STATIC PROCEDURE MiseEnSurveillance()
       RETURN
    ENDIF
 
-   /* deja en surveillance lors d'un passage precedent -> on ne refait pas */
-   hDeja := { => }
-   SUIVI->( dbGoTop() )
-   DO WHILE ! SUIVI->( Eof() )
-      IF AllTrim( SUIVI->STATUT ) $ "AJOUTE|DEJA|INVALIDE" .AND. AllTrim( SUIVI->MODE ) == "REEL"
-         hDeja[ SUIVI->SERIE + "|" + AllTrim( SUIVI->SIREN_ORI ) ] := .T.
-      ENDIF
-      SUIVI->( dbSkip() )
-   ENDDO
-
    BEGIN SEQUENCE WITH {| e | Break( e ) }
-      dbUseArea( .T., NIL, cFicDeb, "DEB", .T., .T. )
+      /* ouverture partagee, lecture seule, codepage des DBF ; index CDX de production ouvert si present */
+      dbUseArea( .T., "SIXCDX", cFicDeb, "DEB", .T., .T., CdpDbf() )
+      DEB->( ordSetFocus( 0 ) )     /* lecture dans l'ordre physique */
    RECOVER
       CsLog( "ERREUR : impossible d'ouvrir " + cFicDeb )
       SUIVI->( dbCloseArea() )
@@ -201,7 +194,7 @@ STATIC PROCEDURE MiseEnSurveillance()
          DEB->( dbSkip() )
          LOOP
       ENDIF
-      IF hb_HHasKey( hDeja, cCle ) .OR. hb_HHasKey( hVu, cCle )
+      IF hb_HHasKey( hVu, cCle ) .OR. DejaTraite( cSerie, cSirenOri )
          DEB->( dbSkip() )
          LOOP
       ENDIF
@@ -484,33 +477,24 @@ STATIC PROCEDURE RecupereAlertes()
    LOCAL lMarquer  := Cfg( "ALERTES", "MARQUER_TRAITEES", "0" ) == "1"
    LOCAL lNonTrt   := Cfg( "ALERTES", "SEULEMENT_NON_TRAITEES", "1" ) == "1"
    LOCAL nSize     := 100
-   LOCAL hPort, hDeja := { => }, hSoc := { => }, cNom, cId, nPage, nStatus, cResp, hJson
+   LOCAL hPort, hDeja := { => }, lSuivi := .F., cNom, cId, nPage, nStatus, cResp, hJson
    LOCAL aEv, hEv, cNotif, nNew, nTotal := 0, cUrl, hInfo, cDate, nSt2, cR2
 
    IF ! OuvreAlertes( cFicAl )
       RETURN
    ENDIF
-   ALERT->( dbGoTop() )
-   DO WHILE ! ALERT->( Eof() )
-      hDeja[ AllTrim( ALERT->NOTIF_ID ) ] := .T.
-      ALERT->( dbSkip() )
-   ENDDO
+   ALERT->( ordSetFocus( "NOTIF" ) )
 
-   /* correspondance identifiant Creditsafe -> debiteur (depuis le fichier de suivi) */
-   IF hb_FileExists( cFicSuivi ) .AND. OuvreSuivi( cFicSuivi )
-      SUIVI->( dbGoTop() )
-      DO WHILE ! SUIVI->( Eof() )
-         IF ! Empty( SUIVI->CS_ID ) .AND. ! hb_HHasKey( hSoc, AllTrim( SUIVI->CS_ID ) )
-            hSoc[ AllTrim( SUIVI->CS_ID ) ] := { "SIREN" => SUIVI->SIREN, "SERIE" => SUIVI->SERIE, ;
-                                                 "CA" => SUIVI->CA, "CODERELA" => SUIVI->CODERELA }
-         ENDIF
-         SUIVI->( dbSkip() )
-      ENDDO
-      SUIVI->( dbCloseArea() )
+   /* correspondance identifiant Creditsafe -> debiteur (fichier de suivi, tag CSID) */
+   IF hb_FileExists( cFicSuivi )
+      lSuivi := OuvreSuivi( cFicSuivi )
    ENDIF
 
    IF ! Authentifier()
       ALERT->( dbCloseArea() )
+      IF lSuivi
+         SUIVI->( dbCloseArea() )
+      ENDIF
       RETURN
    ENDIF
    hPort := ListePortefeuilles()
@@ -546,12 +530,12 @@ STATIC PROCEDURE RecupereAlertes()
          nNew := 0
          FOR EACH hEv IN aEv
             cNotif := ToS( JGet( hEv, "notificationEventId" ) )
-            IF Empty( cNotif ) .OR. hb_HHasKey( hDeja, cNotif )
+            IF Empty( cNotif ) .OR. hb_HHasKey( hDeja, cNotif ) .OR. ALERT->( dbSeek( PadR( cNotif, 40 ) ) )
                LOOP
             ENDIF
             hDeja[ cNotif ] := .T.
             nNew++
-            hInfo := hb_HGetDef( hSoc, ToS( JGet( hEv, "company", "id" ) ), { => } )
+            hInfo := InfoDebiteur( ToS( JGet( hEv, "company", "id" ) ) )
 
             ALERT->( dbAppend() )
             ALERT->NOTIF_ID   := cNotif
@@ -582,7 +566,9 @@ STATIC PROCEDURE RecupereAlertes()
                HttpJson( "PATCH", "/monitoring/portfolios/" + cId + "/notificationEvents/" + cNotif, ;
                          { "isProcessed" => .T. }, @nSt2, @cR2 )
                ALERT->TRAITEE := nSt2 >= 200 .AND. nSt2 < 300
+               ALERT->( dbCommit() )
             ENDIF
+            ALERT->( dbUnlock() )
          NEXT
          IF Len( aEv ) < nSize .OR. nNew == 0
             EXIT
@@ -593,6 +579,9 @@ STATIC PROCEDURE RecupereAlertes()
 
    ALERT->( dbCommit() )
    ALERT->( dbCloseArea() )
+   IF lSuivi
+      SUIVI->( dbCloseArea() )
+   ENDIF
    CsLog( hb_ntos( nTotal ) + " nouvelle(s) alerte(s) enregistree(s) dans " + cFicAl )
 
    RETURN
@@ -826,12 +815,16 @@ STATIC FUNCTION OuvreSuivi( cFic )
       { "HTTP",       "N",   4, 0 }, ;
       { "MESSAGE",    "C", 200, 0 } }
 
-   RETURN OuvreOuCree( cFic, aStruct, "SUIVI" )
+   RETURN OuvreOuCree( cFic, aStruct, "SUIVI", { ;
+      { "CLE",   "SERIE+SIREN_ORI" }, ;
+      { "SIREN", "SIREN" }, ;
+      { "CSID",  "CS_ID" }, ;
+      { "PORTF", "PORTF_NOM+SIREN" } } )
 
 STATIC FUNCTION OuvreAlertes( cFic )
 
    LOCAL aStruct := { ;
-      { "NOTIF_ID",   "C",  20, 0 }, ;
+      { "NOTIF_ID",   "C",  40, 0 }, ;
       { "EVENT_ID",   "C",  20, 0 }, ;
       { "DATE_EVT",   "C",  25, 0 }, ;
       { "D_EVT",      "D",   8, 0 }, ;
@@ -851,24 +844,85 @@ STATIC FUNCTION OuvreAlertes( cFic )
       { "DATE_RECUP", "D",   8, 0 }, ;
       { "TRAITEE",    "L",   1, 0 } }
 
-   RETURN OuvreOuCree( cFic, aStruct, "ALERT" )
+   RETURN OuvreOuCree( cFic, aStruct, "ALERT", { ;
+      { "NOTIF", "NOTIF_ID" }, ;
+      { "SIREN", "SIREN+DTOS(D_EVT)" }, ;
+      { "DATE",  "DTOS(D_EVT)" }, ;
+      { "CSID",  "CS_ID" } } )
 
-STATIC FUNCTION OuvreOuCree( cFic, aStruct, cAlias )
+/* Ouvre (ou cree) un DBF en SIXCDX / codepage DBF, avec son index CDX de production.
+   Les tags manquants sont crees (ouverture exclusive le temps de la creation). */
+STATIC FUNCTION OuvreOuCree( cFic, aStruct, cAlias, aTags )
 
-   LOCAL lOk := .T.
+   LOCAL lOk := .T., cCdp := CdpDbf(), aManque := {}, aT
 
    BEGIN SEQUENCE WITH {| e | Break( e ) }
       IF ! hb_FileExists( cFic )
-         dbCreate( cFic, aStruct )
-         CsLog( "Fichier cree : " + cFic )
+         dbCreate( cFic, aStruct, "SIXCDX", .F., NIL, NIL, cCdp )
+         CsLog( "Fichier cree : " + cFic + " (SIXCDX, " + cCdp + ")" )
       ENDIF
-      dbUseArea( .T., NIL, cFic, cAlias, .T., .F. )
+      dbUseArea( .T., "SIXCDX", cFic, cAlias, .T., .F., cCdp )
+      FOR EACH aT IN aTags
+         IF ( cAlias )->( ordNumber( aT[ 1 ] ) ) == 0
+            AAdd( aManque, aT )
+         ENDIF
+      NEXT
+      IF ! Empty( aManque )
+         ( cAlias )->( dbCloseArea() )
+         dbUseArea( .T., "SIXCDX", cFic, cAlias, .F., .F., cCdp )
+         FOR EACH aT IN aManque
+            ( cAlias )->( ordCreate( NIL, aT[ 1 ], aT[ 2 ], hb_macroBlock( aT[ 2 ] ) ) )
+            CsLog( "Index cree : " + hb_FNameExtSet( cFic, ".cdx" ) + " tag " + aT[ 1 ] + " = " + aT[ 2 ] )
+         NEXT
+         ( cAlias )->( dbCloseArea() )
+         dbUseArea( .T., "SIXCDX", cFic, cAlias, .T., .F., cCdp )
+      ENDIF
+      ( cAlias )->( ordSetFocus( 0 ) )
    RECOVER
-      CsLog( "ERREUR : impossible d'ouvrir/creer " + cFic )
+      CsLog( "ERREUR : impossible d'ouvrir/creer/indexer " + cFic + ;
+             iif( Empty( aManque ), "", " (creation d'index : le fichier doit etre libre)" ) )
+      IF Select( cAlias ) > 0
+         ( cAlias )->( dbCloseArea() )
+      ENDIF
       lOk := .F.
    END SEQUENCE
 
    RETURN lOk
+
+STATIC FUNCTION CdpDbf()
+   RETURN Upper( Cfg( "GENERAL", "CODEPAGE_DBF", "FR850" ) )
+
+/* .T. si la serie + SIREN a deja ete traitee avec succes (mode REEL) */
+STATIC FUNCTION DejaTraite( cSerie, cSirenOri )
+
+   LOCAL cCle := PadR( cSerie, 2 ) + PadR( cSirenOri, 20 ), lDeja := .F.
+
+   SUIVI->( ordSetFocus( "CLE" ) )
+   SUIVI->( dbSeek( cCle ) )
+   DO WHILE ! SUIVI->( Eof() ) .AND. SUIVI->SERIE + SUIVI->SIREN_ORI == cCle
+      IF AllTrim( SUIVI->MODE ) == "REEL" .AND. ;
+         AScan( { "AJOUTE", "DEJA", "INVALIDE" }, AllTrim( SUIVI->STATUT ) ) > 0
+         lDeja := .T.
+         EXIT
+      ENDIF
+      SUIVI->( dbSkip() )
+   ENDDO
+
+   RETURN lDeja
+
+/* Debiteur correspondant a un identifiant Creditsafe (tag CSID du suivi) */
+STATIC FUNCTION InfoDebiteur( cCsId )
+
+   IF Select( "SUIVI" ) == 0 .OR. Empty( cCsId )
+      RETURN { => }
+   ENDIF
+   SUIVI->( ordSetFocus( "CSID" ) )
+   IF SUIVI->( dbSeek( PadR( cCsId, 30 ) ) )
+      RETURN { "SIREN" => SUIVI->SIREN, "SERIE" => SUIVI->SERIE, ;
+               "CA" => SUIVI->CA, "CODERELA" => SUIVI->CODERELA }
+   ENDIF
+
+   RETURN { => }
 
 STATIC PROCEDURE EcritSuivi( hRes )
 
@@ -889,6 +943,7 @@ STATIC PROCEDURE EcritSuivi( hRes )
       ENDIF
    NEXT
    SUIVI->( dbCommit() )
+   SUIVI->( dbUnlock() )
 
    RETURN
 
@@ -1057,6 +1112,7 @@ STATIC FUNCTION IniParDefaut()
       "FICHIER_ALERTES=CsAlertes.dbf" + CRLF + ;
       "FICHIER_LOG=creditsafe.log" + CRLF + ;
       "CODEPAGE=FRWIN" + CRLF + ;
+      "CODEPAGE_DBF=FR850" + CRLF + ;
       "SIMULATION=1" + CRLF + ;
       "MAX_DEBITEURS=0" + CRLF + CRLF + ;
       "[CHAMPS]" + CRLF + ;
