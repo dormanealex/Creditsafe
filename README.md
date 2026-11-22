@@ -25,7 +25,7 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
 | 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
 | 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
-| 5 | **Débiteurs à vérifier** : liste des `A_VERIFIER` (dernier traitement de chaque débiteur), avec la société proposée, son SIREN et sa note. Clic sur une ligne : détail (débiteur, société proposée, 2ᵉ société trouvée) et bouton **Copier le SIREN** |
+| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée, et bouton **Copier le SIREN** |
 | 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
 | 7 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
 | 8 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
@@ -38,7 +38,7 @@ Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se
 * les questions et les fins de traitement affichent des **boutons cliquables** (Oui / Non, Retour au menu…) ;
 * pendant un traitement, le bouton **Arrêter** (ou Échap) arrête proprement après le débiteur en cours ;
 * la croix de la fenêtre fait de même, puis ferme le programme ;
-* agrandir la fenêtre agrandit les caractères.
+* la fenêtre fait 132 colonnes ; agrandir la fenêtre agrandit les caractères.
 
 Lancé par double-clic, le programme ferme la console vide ouverte par Windows. Les lancements avec argument
 (`SURVEIL`, `ALERTES`, `TEST`, donc les tâches planifiées) restent en console, sans fenêtre.

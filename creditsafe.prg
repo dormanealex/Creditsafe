@@ -20,6 +20,8 @@
 #include "dbstruct.ch"
 #include "inkey.ch"
 #include "hbgtinfo.ch"
+#include "box.ch"
+#include "button.ch"
 
 REQUEST HB_CODEPAGE_FRWIN
 REQUEST HB_CODEPAGE_FR850
@@ -146,8 +148,8 @@ STATIC PROCEDURE MenuPrincipal()
                   "8. Modifier les parametres (Bloc-notes)", ;
                   "9. Consulter le journal (Bloc-notes)", ;
                   "0. Quitter" }
-      @ 22, 8 SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
-      nChoix := ChoixMenu( aItems, 10, 8, 52, nChoix )
+      @ 22, Int( ( MaxCol() - 51 ) / 2 ) SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
+      nChoix := ChoixMenu( aItems, 10, Int( ( MaxCol() - 51 ) / 2 ), 52, nChoix )
 
       DO CASE
       CASE nChoix == 0 .OR. nChoix == 10 .OR. s_lFermer
@@ -324,14 +326,14 @@ STATIC PROCEDURE EnteteMenu()
    LOCAL nMax := Val( Cfg( "GENERAL", "MAX_DEBITEURS", "0" ) )
 
    @ 1, 2 SAY "CREDITSAFE - Surveillance des debiteurs professionnels"
-   @ 2, 2 SAY Replicate( "-", 76 )
+   @ 2, 2 SAY Replicate( "-", MaxCol() - 3 )
    @ 3, 2 SAY "Parametres    : " + Left( s_cIniFile, 60 )
    @ 4, 2 SAY "Debiteurs     : " + Left( CheminFichier( Cfg( "GENERAL", "FICHIER_DEBITEURS", "DebSiren.dbf" ) ), 60 )
    @ 5, 2 SAY "Environnement : " + Upper( Cfg( "API", "ENVIRONNEMENT", "SANDBOX" ) ) + "  (" + s_cBaseUrl + ")"
    @ 6, 2 SAY "Mode          : " + iif( s_lSimul, "SIMULATION (rien n'est cree chez Creditsafe)", "REEL (les societes sont ajoutees)" ) + ;
               MarqueSession( "GENERAL", "SIMULATION" )
    @ 7, 2 SAY "Max debiteurs : " + iif( nMax > 0, hb_ntos( nMax ), "sans limite" ) + MarqueSession( "GENERAL", "MAX_DEBITEURS" )
-   @ 8, 2 SAY Replicate( "-", 76 )
+   @ 8, 2 SAY Replicate( "-", MaxCol() - 3 )
 
    RETURN
 
@@ -441,99 +443,171 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
  *  Derniere ligne de chaque debiteur (par mode) dont le statut est A_VERIFIER.
  *  Liste a la souris (clic = detail, molette = defilement), detail avec copie du SIREN.
  * ========================================================================== */
-#define LV_HAUT   3              /* premiere ligne de la liste */
-#define LV_NB     18             /* nombre de lignes affichees */
+#define LV_HAUT      3           /* premiere ligne du TBrowse (dans le cadre) */
+#define LV_BAS       19          /* derniere ligne du TBrowse */
+#define COUL_FOND    "W/B"
+#define COUL_TITRE   "N/BG"
+/* TBrowse : 1 normal, 2 ligne choisie, 3 note faible, 4 simulation */
+#define COUL_LISTE   "W+/B,N/BG,GR+/B,BG/B"
 
 STATIC PROCEDURE ListeAVerifier()
 
-   LOCAL aListe, nSel := 1, nHaut := 1, nTouche, i, nLig, aPos, lFin := .F., cMsg := ""
+   LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T.
    LOCAL aBoutons := { "Detail", "Copier le SIREN", "Actualiser", "Retour au menu" }
+   LOCAL nNoteMin := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) ) - 15
 
-   aListe := LitAVerifier( @cMsg )
-   SetColor( "W/N" )
    DO WHILE ! lFin .AND. ! s_lFermer
-      CLS
-      @ 0, 1 SAY "DEBITEURS A VERIFIER : " + hb_ntos( Len( aListe ) ) + iif( Empty( cMsg ), "", "   " + cMsg )
-      @ 1, 1 SAY "M CA       Debiteur              CP    Proposition Creditsafe  SIREN     Note"
-      @ 2, 1 SAY Replicate( "-", 78 )
-      IF Empty( aListe )
-         @ LV_HAUT + 1, 3 SAY "Aucun debiteur A_VERIFIER dans le fichier de suivi."
+      IF lRelire
+         aListe := LitAVerifier( @cMsg )
+         nPos := 1
+         oB := NavigateurAVerifier( aListe, @nPos, nNoteMin )
+         lRelire := .F.
       ENDIF
-      nSel  := Max( 1, Min( nSel, Len( aListe ) ) )
-      nHaut := Max( 1, Min( nHaut, nSel ) )
-      IF nSel >= nHaut + LV_NB
-         nHaut := nSel - LV_NB + 1
-      ENDIF
-      FOR i := nHaut TO Min( Len( aListe ), nHaut + LV_NB - 1 )
-         @ LV_HAUT + i - nHaut, 0 SAY PadR( LigneAVerifier( aListe[ i ] ), MaxCol() + 1 ) ;
-            COLOR iif( i == nSel, COUL_CHOIX, "W/N" )
-      NEXT
-      IF Len( aListe ) > LV_NB
-         @ LV_HAUT + LV_NB, 1 SAY "Lignes " + hb_ntos( nHaut ) + " a " + hb_ntos( Min( Len( aListe ), nHaut + LV_NB - 1 ) ) + ;
-            " sur " + hb_ntos( Len( aListe ) ) + " - molette ou PgUp/PgDn pour defiler"
-      ENDIF
-      @ LIG_BOUTONS, 2 SAY "Clic sur une ligne pour le detail.  M : R = reel, S = simulation"
+      EcranAVerifier( aListe, cMsg )
       aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
 
-      nTouche := Inkey( 0, HB_INKEY_ALL )
-      nLig := MRow() - LV_HAUT + nHaut
+      IF oB == NIL
+         /* liste vide : seulement les boutons */
+         nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
+      ELSE
+         oB:refreshAll()
+         oB:forceStable()
+         oB:colorRect( { oB:rowPos, 1, oB:rowPos, oB:colCount }, { 2, 2 } )
+         @ LV_BAS + 2, 2 SAY PadR( "Ligne " + hb_ntos( nPos ) + " / " + hb_ntos( Len( aListe ) ), 20 ) COLOR COUL_FOND
+         nTouche := Inkey( 0, HB_INKEY_ALL )
+      ENDIF
+
       DO CASE
       CASE nTouche == HB_K_CLOSE
          s_lFermer := .T.
       CASE nTouche == K_ESC .OR. nTouche == K_RBUTTONDOWN
          lFin := .T.
-      CASE nTouche == K_UP
-         nSel--
-      CASE nTouche == K_DOWN
-         nSel++
-      CASE nTouche == K_PGUP .OR. nTouche == K_MWFORWARD
-         nSel  -= iif( nTouche == K_PGUP, LV_NB, 3 )
-         nHaut -= iif( nTouche == K_PGUP, LV_NB, 3 )
-      CASE nTouche == K_PGDN .OR. nTouche == K_MWBACKWARD
-         nSel  += iif( nTouche == K_PGDN, LV_NB, 3 )
-         nHaut += iif( nTouche == K_PGDN, LV_NB, 3 )
-         nHaut := Min( nHaut, Max( 1, Len( aListe ) - LV_NB + 1 ) )
-      CASE nTouche == K_HOME
-         nSel := 1
-      CASE nTouche == K_END
-         nSel := Len( aListe )
-      CASE nTouche == K_MOUSEMOVE
-         IF MRow() >= LV_HAUT .AND. MRow() < LV_HAUT + LV_NB .AND. nLig <= Len( aListe )
-            nSel := nLig
+      CASE nTouche == K_ENTER
+         IF oB != NIL
+            DetailAVerifier( aListe[ nPos ] )
          ENDIF
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
-         IF MRow() >= LV_HAUT .AND. MRow() < LV_HAUT + LV_NB .AND. nLig <= Len( aListe )
-            nSel := nLig
-            DetailAVerifier( aListe[ nSel ] )
+         IF oB != NIL .AND. LigneSouris( oB, Len( aListe ), @nPos )
+            /* clic sur une ligne : on s'y place et on ouvre le detail */
+            DetailAVerifier( aListe[ nPos ] )
          ELSE
             SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
             CASE 1
-               IF ! Empty( aListe )
-                  DetailAVerifier( aListe[ nSel ] )
+               IF oB != NIL
+                  DetailAVerifier( aListe[ nPos ] )
                ENDIF
                EXIT
             CASE 2
-               IF ! Empty( aListe )
-                  CopieSiren( aListe[ nSel ] )
+               IF oB != NIL
+                  CopieSiren( aListe[ nPos ] )
                ENDIF
                EXIT
             CASE 3
-               aListe := LitAVerifier( @cMsg )
+               lRelire := .T.
                EXIT
             CASE 4
                lFin := .T.
                EXIT
             ENDSWITCH
          ENDIF
-      CASE nTouche == K_ENTER
-         IF ! Empty( aListe )
-            DetailAVerifier( aListe[ nSel ] )
+      CASE nTouche == K_MOUSEMOVE
+         /* survol : la ligne sous la souris devient la ligne choisie */
+         IF oB != NIL
+            LigneSouris( oB, Len( aListe ), @nPos )
          ENDIF
+      CASE oB != NIL
+         /* fleches, PgUp/PgDn, Debut/Fin, molette : gestion standard du TBrowse */
+         oB:applyKey( nTouche )
       ENDCASE
    ENDDO
    SetColor( COUL_MENU )
 
    RETURN
+
+/* Ligne de la liste sous la souris (toute la largeur, separateurs compris) :
+   devient la ligne courante. Renvoie .F. si la souris n'est pas sur une ligne de donnees. */
+STATIC FUNCTION LigneSouris( oB, nNb, nPos )
+
+   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nLig, nIndex
+
+   IF MRow() < nPremiere .OR. MRow() > oB:nBottom .OR. MCol() < oB:nLeft .OR. MCol() > oB:nRight
+      RETURN .F.
+   ENDIF
+   nLig   := MRow() - nPremiere + 1
+   nIndex := nPos - oB:rowPos + nLig
+   IF nIndex < 1 .OR. nIndex > nNb
+      RETURN .F.
+   ENDIF
+   /* meme premiere ligne affichee : seuls la position et le pointeur changent */
+   nPos      := nIndex
+   oB:rowPos := nLig
+
+   RETURN .T.
+
+/* Fond, titre et cadre de la liste */
+STATIC PROCEDURE EcranAVerifier( aListe, cMsg )
+
+   SetColor( COUL_FOND )
+   CLS
+   @ 0, 0 SAY PadC( "DEBITEURS A VERIFIER (" + hb_ntos( Len( aListe ) ) + ")", MaxCol() + 1 ) COLOR COUL_TITRE
+   @ 1, 2 SAY "Note sur 100 (jaune : note faible).  En cyan :"
+   @ 1, Col() + 1 SAY "simulation" COLOR "BG/B"
+   DispBox( LV_HAUT - 1, 0, LV_BAS + 1, MaxCol(), B_DOUBLE_SINGLE + " ", "W+/B" )
+   IF Empty( aListe )
+      @ LV_HAUT + 2, 4 SAY "Aucun debiteur A_VERIFIER dans le fichier de suivi." + iif( Empty( cMsg ), "", "  " + cMsg )
+   ELSE
+      @ LV_BAS + 2, 24 SAY "Clic : detail.  Molette, fleches, PgUp/PgDn : defiler."
+   ENDIF
+
+   RETURN
+
+/* TBrowse sur le tableau des A_VERIFIER (NIL si la liste est vide) */
+STATIC FUNCTION NavigateurAVerifier( aListe, nPos, nNoteMin )
+
+   LOCAL oB, oC, bCoul, aCols, aC
+
+   IF Empty( aListe )
+      RETURN NIL
+   ENDIF
+   oB := TBrowseNew( LV_HAUT, 1, LV_BAS, MaxCol() - 1 )
+   oB:colorSpec     := COUL_LISTE
+   oB:headSep       := Chr( 205 ) + Chr( 209 ) + Chr( 205 )   /* traits doubles (caracteres boite) */
+   oB:colSep        := " " + Chr( 179 ) + " "
+   oB:autoLite      := .F.                                       /* surbrillance de la ligne entiere */
+   oB:goTopBlock    := {|| nPos := 1 }
+   oB:goBottomBlock := {|| nPos := Len( aListe ) }
+   oB:skipBlock     := {| n | n := Max( 1 - nPos, Min( Len( aListe ) - nPos, n ) ), nPos += n, n }
+
+   bCoul := {|| iif( aListe[ nPos ][ "MODE" ] == "REEL", { 1, 2 }, { 4, 2 } ) }      /* simulation en cyan */
+
+   /* colonnes : { titre, champ, largeur }. Separateurs de 3 caracteres.
+      132 colonnes (largeur utile 130) : 7+26+5+16+26+16+9 = 105, + note 4, + 7 x 3 = 130
+      80 colonnes  (largeur utile 78)  : 7+18+5+20+9 = 59, + note 4, + 5 x 3 = 78 */
+   IF MaxCol() >= 131
+      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 26 }, { "CP", "CP_DEB", 5 }, { "Ville", "VILLE_DEB", 16 }, ;
+                 { "Societe proposee", "CS_NOM", 26 }, { "Ville (societe)", "CS_VILLE", 16 }, { "SIREN", "SIREN", 9 } }
+   ELSE
+      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 18 }, { "CP", "CP_DEB", 5 }, ;
+                 { "Societe proposee", "CS_NOM", 20 }, { "SIREN", "SIREN", 9 } }
+   ENDIF
+   FOR EACH aC IN aCols
+      oC := TBColumnNew( aC[ 1 ], ColonneAV( aListe, @nPos, aC[ 2 ], aC[ 3 ] ) )
+      oC:colorBlock := bCoul
+      oB:addColumn( oC )
+   NEXT
+   /* notes faibles en jaune */
+   oC := TBColumnNew( "Note", {|| Str( NoteAV( aListe[ nPos ] ), 4 ) } )
+   oC:colorBlock := {|| iif( NoteAV( aListe[ nPos ] ) < nNoteMin, { 3, 2 }, Eval( bCoul ) ) }
+   oB:addColumn( oC )
+
+   RETURN oB
+
+/* Bloc d'une colonne texte (fonction a part : chaque bloc garde son propre champ) */
+STATIC FUNCTION ColonneAV( aListe, nPos, cChamp, nLarg )
+   RETURN {|| PadR( aListe[ nPos ][ cChamp ], nLarg ) }
+
+STATIC FUNCTION NoteAV( h )
+   RETURN iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 )
 
 /* Lit le suivi : derniere ligne de chaque debiteur (par mode) dont le statut est A_VERIFIER */
 STATIC FUNCTION LitAVerifier( cMsg )
@@ -594,12 +668,6 @@ STATIC FUNCTION ChampSuivi( cChamp )
 
    RETURN iif( HB_ISSTRING( x ), AllTrim( x ), x )
 
-STATIC FUNCTION LigneAVerifier( h )
-
-   RETURN " " + Left( h[ "MODE" ], 1 ) + " " + PadR( h[ "CA" ], 8 ) + " " + PadR( h[ "NOM_DEB" ], 21 ) + " " + ;
-          PadR( h[ "CP_DEB" ], 5 ) + " " + PadR( h[ "CS_NOM" ], 23 ) + " " + PadR( h[ "SIREN" ], 9 ) + " " + ;
-          Str( iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 ), 4 )
-
 /* Detail d'un debiteur a verifier */
 STATIC PROCEDURE DetailAVerifier( h )
 
@@ -607,34 +675,46 @@ STATIC PROCEDURE DetailAVerifier( h )
    LOCAL cMsg := h[ "MESSAGE" ], nP
 
    DO WHILE ! lFin .AND. ! s_lFermer
+      SetColor( COUL_FOND )
       CLS
-      @  0, 1 SAY "DETAIL DU DEBITEUR A VERIFIER" + "   (" + h[ "MODE" ] + ", traite le " + DToC( h[ "DATE_TRT" ] ) + ")"
-      @  1, 1 SAY Replicate( "-", 78 )
-      @  2, 1 SAY "Debiteur"
-      @  3, 3 SAY "CA            : " + h[ "CA" ]
-      @  4, 3 SAY "Nom           : " + h[ "NOM_DEB" ]
-      @  5, 3 SAY "Adresse       : " + h[ "ADR_DEB" ]
-      @  6, 3 SAY "              : " + h[ "CP_DEB" ] + " " + h[ "VILLE_DEB" ]
-      @  8, 1 SAY "Societe proposee par Creditsafe"
-      @  9, 3 SAY "Nom           : " + h[ "CS_NOM" ]
-      @ 10, 3 SAY "SIREN         : " + h[ "SIREN" ] COLOR "W+/N"
-      @ 11, 3 SAY "Adresse       : " + Left( h[ "CS_ADRESSE" ], 60 )
-      @ 12, 3 SAY "              : " + h[ "CS_CP" ] + " " + h[ "CS_VILLE" ]
-      @ 13, 3 SAY "Etat, type    : " + h[ "CS_STATUT" ] + iif( Empty( h[ "CS_TYPE" ] ), "", ", " + h[ "CS_TYPE" ] )
-      @ 14, 3 SAY "Note          : " + hb_ntos( iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 ) ) + " / 100" + ;
-                  "   (" + hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s))"
-      @ 16, 1 SAY "Message de la recherche"
-      /* le message contient la 2e societe apres "|" : une ligne par societe */
-      nP := At( "|", cMsg )
-      IF nP > 0
-         @ 17, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), 76 )
-         @ 18, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), 76 )
+      @ 0, 0 SAY PadC( "DEBITEUR A VERIFIER  -  " + h[ "MODE" ] + ", traite le " + DToC( h[ "DATE_TRT" ] ), MaxCol() + 1 ) COLOR COUL_TITRE
+
+      IF MaxCol() >= 131
+         DetailLarge( h, cMsg )
       ELSE
-         @ 17, 3 SAY Left( cMsg, 76 )
-         @ 18, 3 SAY SubStr( cMsg, 77, 76 )
+         DispBox( 1, 0, 6, MaxCol(), B_SINGLE + " ", "W+/B" )
+         @ 1, 2 SAY " Debiteur " COLOR "W+/B"
+         @ 2, 3 SAY "CA       : " + h[ "CA" ]
+         @ 3, 3 SAY "Nom      : " + h[ "NOM_DEB" ] COLOR "W+/B"
+         @ 4, 3 SAY "Adresse  : " + Left( h[ "ADR_DEB" ], 64 )
+         @ 5, 3 SAY "           " + h[ "CP_DEB" ] + " " + h[ "VILLE_DEB" ]
+
+         DispBox( 7, 0, 14, MaxCol(), B_SINGLE + " ", "W+/B" )
+         @ 7, 2 SAY " Societe proposee par Creditsafe " COLOR "W+/B"
+         @  8, 3 SAY "Nom      : " + h[ "CS_NOM" ] COLOR "W+/B"
+         @  9, 3 SAY "SIREN    : "
+         @  9, 14 SAY " " + h[ "SIREN" ] + " " COLOR COUL_TITRE
+         @ 10, 3 SAY "Adresse  : " + Left( h[ "CS_ADRESSE" ], 64 )
+         @ 11, 3 SAY "           " + h[ "CS_CP" ] + " " + h[ "CS_VILLE" ]
+         @ 12, 3 SAY "Etat     : " + h[ "CS_STATUT" ] + iif( Empty( h[ "CS_TYPE" ] ), "", "  (" + h[ "CS_TYPE" ] + ")" )
+         @ 13, 3 SAY "Note     : " + hb_ntos( NoteAV( h ) ) + " / 100" + ;
+                     "    " + hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s)"
+
+         DispBox( 15, 0, 19, MaxCol(), B_SINGLE + " ", "W+/B" )
+         @ 15, 2 SAY " Resultat de la recherche " COLOR "W+/B"
+         /* le message contient la 2e societe apres "|" : une ligne par societe */
+         nP := At( "|", cMsg )
+         IF nP > 0
+            @ 16, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), 75 )
+            @ 17, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), 75 )
+         ELSE
+            @ 16, 3 SAY Left( cMsg, 75 )
+            @ 17, 3 SAY SubStr( cMsg, 76, 75 )
+         ENDIF
+
+         @ 20, 2 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs."
+         @ 21, 2 SAY "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
       ENDIF
-      @ 20, 1 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs ;"
-      @ 21, 1 SAY "au prochain passage, le debiteur sera mis en surveillance par son SIREN."
       aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
 
       nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
@@ -654,6 +734,45 @@ STATIC PROCEDURE DetailAVerifier( h )
          ENDSWITCH
       ENDCASE
    ENDDO
+
+   RETURN
+
+/* Detail en 132 colonnes : debiteur et societe proposee cote a cote */
+STATIC PROCEDURE DetailLarge( h, cMsg )
+
+   LOCAL nMil := Int( ( MaxCol() + 1 ) / 2 ), nL := nMil - 4, nP
+
+   DispBox( 1, 0, 8, nMil - 1, B_SINGLE + " ", "W+/B" )
+   @ 1, 2 SAY " Debiteur " COLOR "W+/B"
+   @ 2, 3 SAY "CA       : " + h[ "CA" ]
+   @ 3, 3 SAY "Nom      : " + Left( h[ "NOM_DEB" ], nL - 11 ) COLOR "W+/B"
+   @ 4, 3 SAY "Adresse  : " + Left( h[ "ADR_DEB" ], nL - 11 )
+   @ 5, 3 SAY "           " + h[ "CP_DEB" ] + " " + h[ "VILLE_DEB" ]
+
+   DispBox( 1, nMil, 8, MaxCol(), B_SINGLE + " ", "W+/B" )
+   @ 1, nMil + 2 SAY " Societe proposee par Creditsafe " COLOR "W+/B"
+   @ 2, nMil + 3 SAY "Nom      : " + Left( h[ "CS_NOM" ], nL - 11 ) COLOR "W+/B"
+   @ 3, nMil + 3 SAY "SIREN    : "
+   @ 3, nMil + 14 SAY " " + h[ "SIREN" ] + " " COLOR COUL_TITRE
+   @ 4, nMil + 3 SAY "Adresse  : " + Left( h[ "CS_ADRESSE" ], nL - 11 )
+   @ 5, nMil + 3 SAY "           " + h[ "CS_CP" ] + " " + h[ "CS_VILLE" ]
+   @ 6, nMil + 3 SAY "Etat     : " + h[ "CS_STATUT" ] + iif( Empty( h[ "CS_TYPE" ] ), "", "  (" + h[ "CS_TYPE" ] + ")" )
+   @ 7, nMil + 3 SAY "Note     : " + hb_ntos( NoteAV( h ) ) + " / 100    " + ;
+                     hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s)"
+
+   DispBox( 10, 0, 14, MaxCol(), B_SINGLE + " ", "W+/B" )
+   @ 10, 2 SAY " Resultat de la recherche " COLOR "W+/B"
+   nP := At( "|", cMsg )
+   IF nP > 0
+      @ 11, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), MaxCol() - 5 )
+      @ 12, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), MaxCol() - 5 )
+   ELSE
+      @ 11, 3 SAY Left( cMsg, MaxCol() - 5 )
+      @ 12, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
+   ENDIF
+
+   @ 16, 2 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs. " + ;
+               "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
 
    RETURN
 
@@ -2596,9 +2715,9 @@ STATIC PROCEDURE OuvreFenetre()
    s_pFenetre := pGT
    hb_gtSelect( pGT )
    hb_gtInfo( HB_GTI_FONTNAME, "Consolas" )
-   hb_gtInfo( HB_GTI_FONTSIZE, 20 )
-   hb_gtInfo( HB_GTI_FONTWIDTH, 10 )
-   SetMode( 25, 80 )
+   hb_gtInfo( HB_GTI_FONTSIZE, 18 )
+   hb_gtInfo( HB_GTI_FONTWIDTH, 9 )
+   SetMode( 25, 132 )                        /* 132 colonnes : listes et detail plus larges */
    hb_gtInfo( HB_GTI_WINTITLE, "Creditsafe - surveillance des debiteurs" )
    hb_gtInfo( HB_GTI_RESIZABLE, .T. )      /* agrandir la fenetre agrandit les caracteres */
    hb_gtInfo( HB_GTI_CLOSEMODE, 1 )        /* la croix envoie HB_K_CLOSE : arret propre */
