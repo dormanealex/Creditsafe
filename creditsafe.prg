@@ -198,9 +198,11 @@ STATIC FUNCTION ChoixMenu( aItems, nLig, nCol, nLarg, nChoix )
 
    DO WHILE .T.
       IF nAff != nChoix
+         DispBegin()
          FOR i := 1 TO nNb
             @ nLig + i - 1, nCol SAY PadR( " " + aItems[ i ], nLarg ) COLOR iif( i == nChoix, COUL_CHOIX, "W+/B" )
          NEXT
+         DispEnd()
          nAff := nChoix
       ENDIF
       nTouche := Inkey( 0, INKEY_ALL )
@@ -452,7 +454,7 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
 
 STATIC PROCEDURE ListeAVerifier()
 
-   LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T.
+   LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T., lFond := .T.
    LOCAL aBoutons := { "Detail", "Copier le SIREN", "Actualiser", "Retour au menu" }
    LOCAL nNoteMin := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) ) - 15
 
@@ -462,20 +464,28 @@ STATIC PROCEDURE ListeAVerifier()
          nPos := 1
          oB := NavigateurAVerifier( aListe, @nPos, nNoteMin )
          lRelire := .F.
+         lFond := .T.
       ENDIF
-      EcranAVerifier( aListe, cMsg )
-      aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
 
-      IF oB == NIL
-         /* liste vide : seulement les boutons */
-         nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
-      ELSE
-         oB:refreshAll()
+      /* anti-scintillement : le fond (titre, cadre, boutons) n'est redessine que si necessaire,
+         le TBrowse ne redessine que les lignes modifiees, et tout s'affiche en une fois */
+      DispBegin()
+      IF lFond
+         EcranAVerifier( aListe, cMsg )
+         aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
+         IF oB != NIL
+            oB:refreshAll()
+         ENDIF
+         lFond := .F.
+      ENDIF
+      IF oB != NIL
          oB:forceStable()
          oB:colorRect( { oB:rowPos, 1, oB:rowPos, oB:colCount }, { 2, 2 } )
          @ LV_BAS + 2, 2 SAY PadR( "Ligne " + hb_ntos( nPos ) + " / " + hb_ntos( Len( aListe ) ), 20 ) COLOR COUL_FOND
-         nTouche := Inkey( 0, HB_INKEY_ALL )
       ENDIF
+      DispEnd()
+
+      nTouche := Inkey( 0, iif( oB == NIL, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT, HB_INKEY_ALL ) )
 
       DO CASE
       CASE nTouche == HB_K_CLOSE
@@ -485,21 +495,26 @@ STATIC PROCEDURE ListeAVerifier()
       CASE nTouche == K_ENTER
          IF oB != NIL
             DetailAVerifier( aListe[ nPos ] )
+            lFond := .T.
          ENDIF
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
          IF oB != NIL .AND. LigneSouris( oB, Len( aListe ), @nPos )
             /* clic sur une ligne : on s'y place et on ouvre le detail */
+            oB:forceStable()
             DetailAVerifier( aListe[ nPos ] )
+            lFond := .T.
          ELSE
             SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
             CASE 1
                IF oB != NIL
                   DetailAVerifier( aListe[ nPos ] )
+                  lFond := .T.
                ENDIF
                EXIT
             CASE 2
                IF oB != NIL
                   CopieSiren( aListe[ nPos ] )
+                  lFond := .T.          /* le message a efface les boutons */
                ENDIF
                EXIT
             CASE 3
@@ -511,13 +526,16 @@ STATIC PROCEDURE ListeAVerifier()
             ENDSWITCH
          ENDIF
       CASE nTouche == K_MOUSEMOVE
-         /* survol : la ligne sous la souris devient la ligne choisie */
+         /* survol : la ligne sous la souris devient la ligne choisie (rien a faire si elle l'est deja) */
          IF oB != NIL
             LigneSouris( oB, Len( aListe ), @nPos )
          ENDIF
-      CASE oB != NIL
+      CASE oB != NIL .AND. nTouche < 1000 .OR. nTouche == K_MWFORWARD .OR. nTouche == K_MWBACKWARD
          /* fleches, PgUp/PgDn, Debut/Fin, molette : gestion standard du TBrowse */
-         oB:applyKey( nTouche )
+         IF oB != NIL
+            oB:refreshCurrent()
+            oB:applyKey( nTouche )
+         ENDIF
       ENDCASE
    ENDDO
    SetColor( COUL_MENU )
@@ -528,7 +546,7 @@ STATIC PROCEDURE ListeAVerifier()
    devient la ligne courante. Renvoie .F. si la souris n'est pas sur une ligne de donnees. */
 STATIC FUNCTION LigneSouris( oB, nNb, nPos )
 
-   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nLig, nIndex, nAvant := 0
+   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nLig, nIndex, nEcart
 
    IF MRow() < nPremiere .OR. MRow() > oB:nBottom .OR. MCol() < oB:nLeft .OR. MCol() > oB:nRight
       RETURN .F.
@@ -539,18 +557,21 @@ STATIC FUNCTION LigneSouris( oB, nNb, nPos )
       RETURN .F.
    ENDIF
    /* deplacement par le TBrowse lui-meme (comme TBMouse) : le pointeur nPos suit.
-      Modifier nPos et rowPos directement faisait sauter 2 lignes au reaffichage. */
-   DO WHILE oB:rowPos < nLig .AND. nAvant != nPos
-      nAvant := nPos                /* garde-fou : on s'arrete si le TBrowse ne bouge plus */
-      oB:down()
-      oB:forceStable()
-   ENDDO
-   nAvant := 0
-   DO WHILE oB:rowPos > nLig .AND. nAvant != nPos
-      nAvant := nPos
-      oB:up()
-      oB:forceStable()
-   ENDDO
+      Modifier nPos et rowPos directement faisait sauter 2 lignes au reaffichage.
+      Les deplacements s'accumulent et sont affiches en une fois par l'appelant (anti-scintillement) ;
+      l'ecart est borne par la verification de nIndex ci-dessus. */
+   nEcart := nLig - oB:rowPos
+   IF nEcart != 0
+      oB:refreshCurrent()           /* l'ancienne ligne perdra sa surbrillance */
+      DO WHILE nEcart > 0
+         oB:down()
+         nEcart--
+      ENDDO
+      DO WHILE nEcart < 0
+         oB:up()
+         nEcart++
+      ENDDO
+   ENDIF
 
    RETURN .T.
 
