@@ -60,7 +60,7 @@ PROCEDURE Main( cMode, cIni )
    ENDIF
 
    OuvreLog()
-   Log( "===== Debut " + cMode + " - API " + s_cBaseUrl + iif( s_lSimul, " - MODE SIMULATION", "" ) + " =====" )
+   CsLog( "===== Debut " + cMode + " - API " + s_cBaseUrl + iif( s_lSimul, " - MODE SIMULATION", "" ) + " =====" )
 
    DO CASE
    CASE cMode == "SURVEIL"
@@ -70,10 +70,10 @@ PROCEDURE Main( cMode, cIni )
    CASE cMode == "TEST"
       TestConnexion()
    OTHERWISE
-      Log( "Mode inconnu : " + cMode + "  (SURVEIL, ALERTES ou TEST)" )
+      CsLog( "Mode inconnu : " + cMode + "  (SURVEIL, ALERTES ou TEST)" )
    ENDCASE
 
-   Log( "===== Fin " + cMode + " =====" )
+   CsLog( "===== Fin " + cMode + " =====" )
    IF s_nLog != -1
       FClose( s_nLog )
    ENDIF
@@ -101,10 +101,10 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL bFiltre, hDeja, hVu := { => }, hPort, hStat := { => }
    LOCAL nPosSiren, nPosCA, nPosRela, nPosNom
    LOCAL cCA, cRela, cNom, xSiren, cSirenOri, cSiren, cSerie, cCle, cPortNom, cPortId
-   LOCAL hRes, nTraites := 0, k
+   LOCAL hRes, nTraites := 0, k, xFiltre
 
    IF ! hb_FileExists( cFicDeb )
-      Log( "ERREUR : fichier debiteurs introuvable : " + cFicDeb )
+      CsLog( "ERREUR : fichier debiteurs introuvable : " + cFicDeb )
       RETURN
    ENDIF
    IF ! OuvreSuivi( cFicSuivi )
@@ -124,7 +124,7 @@ STATIC PROCEDURE MiseEnSurveillance()
    BEGIN SEQUENCE WITH {| e | Break( e ) }
       dbUseArea( .T., NIL, cFicDeb, "DEB", .T., .T. )
    RECOVER
-      Log( "ERREUR : impossible d'ouvrir " + cFicDeb )
+      CsLog( "ERREUR : impossible d'ouvrir " + cFicDeb )
       SUIVI->( dbCloseArea() )
       RETURN
    END SEQUENCE
@@ -134,17 +134,17 @@ STATIC PROCEDURE MiseEnSurveillance()
    nPosRela  := DEB->( FieldPos( cChRela ) )
    nPosNom   := DEB->( FieldPos( cChNom ) )
    IF nPosSiren == 0
-      Log( "ERREUR : champ " + cChSiren + " absent de " + cFicDeb + " (voir [CHAMPS] SIREN=)" )
+      CsLog( "ERREUR : champ " + cChSiren + " absent de " + cFicDeb + " (voir [CHAMPS] SIREN=)" )
       DEB->( dbCloseArea() )
       SUIVI->( dbCloseArea() )
       RETURN
    ENDIF
    IF nPosCA == 0 .AND. nPosRela == 0
-      Log( "ATTENTION : ni " + cChCA + " ni " + cChRela + " presents : serie par defaut " + cSerieDef )
+      CsLog( "ATTENTION : ni " + cChCA + " ni " + cChRela + " presents : serie par defaut " + cSerieDef )
    ENDIF
    IF ! Empty( cFiltre )
       bFiltre := hb_macroBlock( cFiltre )
-      Log( "Filtre debiteurs : " + cFiltre )
+      CsLog( "Filtre debiteurs : " + cFiltre )
    ENDIF
 
    /* en simulation on interroge quand meme l'API (lecture seule) mais on ne cree rien */
@@ -160,15 +160,21 @@ STATIC PROCEDURE MiseEnSurveillance()
    DO WHILE ! DEB->( Eof() )
 
       IF bFiltre != NIL
+         /* LOOP / EXIT interdits dans un BEGIN SEQUENCE : on passe par une variable */
+         xFiltre := NIL
          BEGIN SEQUENCE WITH {| e | Break( e ) }
-            IF ! Eval( bFiltre )
-               DEB->( dbSkip() )
-               LOOP
-            ENDIF
+            xFiltre := Eval( bFiltre )
          RECOVER
-            Log( "ERREUR : expression FILTRE invalide : " + cFiltre )
-            EXIT
+            xFiltre := NIL
          END SEQUENCE
+         IF ! HB_ISLOGICAL( xFiltre )
+            CsLog( "ERREUR : expression FILTRE invalide : " + cFiltre )
+            EXIT
+         ENDIF
+         IF ! xFiltre
+            DEB->( dbSkip() )
+            LOOP
+         ENDIF
       ENDIF
 
       cCA   := iif( nPosCA   > 0, AllTrim( ToS( DEB->( FieldGet( nPosCA ) ) ) ), "" )
@@ -241,13 +247,13 @@ STATIC PROCEDURE MiseEnSurveillance()
 
       EcritSuivi( hRes )
       Compte( hStat, hRes[ "STATUT" ] )
-      Log( PadR( cSerie, 3 ) + cSiren + "  " + PadR( hRes[ "STATUT" ], 10 ) + " " + ;
+      CsLog( PadR( cSerie, 3 ) + cSiren + "  " + PadR( hRes[ "STATUT" ], 10 ) + " " + ;
            Left( hb_HGetDef( hRes, "CS_NOM", cNom ), 40 ) + "  -> " + cPortNom + ;
            iif( Empty( hRes[ "MESSAGE" ] ), "", "  (" + hRes[ "MESSAGE" ] + ")" ) )
 
       nTraites++
       IF nMax > 0 .AND. nTraites >= nMax
-         Log( "Limite MAX_DEBITEURS atteinte (" + hb_ntos( nMax ) + ")" )
+         CsLog( "Limite MAX_DEBITEURS atteinte (" + hb_ntos( nMax ) + ")" )
          EXIT
       ENDIF
       IF nPause > 0
@@ -260,9 +266,9 @@ STATIC PROCEDURE MiseEnSurveillance()
    SUIVI->( dbCommit() )
    SUIVI->( dbCloseArea() )
 
-   Log( "Bilan :" )
+   CsLog( "Bilan :" )
    FOR EACH k IN hb_HKeys( hStat )
-      Log( "   " + PadR( k, 12 ) + Str( hStat[ k ], 7 ) )
+      CsLog( "   " + PadR( k, 12 ) + Str( hStat[ k ], 7 ) )
    NEXT
 
    RETURN
@@ -374,7 +380,7 @@ STATIC FUNCTION CreePortefeuille( cNom, cSerie )
    LOCAL cModele := Cfg( "PORTEFEUILLE", "PORTEFEUILLE_MODELE_REGLES", "" )
 
    IF s_lSimul
-      Log( "[SIMULATION] creation du portefeuille " + cNom )
+      CsLog( "[SIMULATION] creation du portefeuille " + cNom )
       RETURN "SIMUL-" + cSerie
    ENDIF
 
@@ -391,7 +397,7 @@ STATIC FUNCTION CreePortefeuille( cNom, cSerie )
    ENDIF
 
    IF ! HttpJson( "POST", "/monitoring/portfolios", hBody, @nStatus, @cResp, @hJson )
-      Log( "ERREUR creation portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
+      CsLog( "ERREUR creation portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
       RETURN ""
    ENDIF
 
@@ -404,7 +410,7 @@ STATIC FUNCTION CreePortefeuille( cNom, cSerie )
       hP := ListePortefeuilles()
       cId := hb_HGetDef( hP, Upper( cNom ), "" )
    ENDIF
-   Log( "Portefeuille cree : " + cNom + " (id " + cId + ")" )
+   CsLog( "Portefeuille cree : " + cNom + " (id " + cId + ")" )
 
    IF ! Empty( cId ) .AND. ! Empty( cModele )
       CopieRegles( cModele, cId )
@@ -419,7 +425,7 @@ STATIC PROCEDURE CopieRegles( cModele, cId )
    LOCAL nStatus := 0, cResp := "", hJson, xRegles, nSt2 := 0, cResp2 := ""
 
    IF ! HttpJson( "GET", "/monitoring/portfolios/" + cModele + "/eventRules/" + cPays, NIL, @nStatus, @cResp, @hJson )
-      Log( "ATTENTION : lecture des regles du portefeuille modele " + cModele + " impossible (HTTP " + hb_ntos( nStatus ) + ")" )
+      CsLog( "ATTENTION : lecture des regles du portefeuille modele " + cModele + " impossible (HTTP " + hb_ntos( nStatus ) + ")" )
       RETURN
    ENDIF
    xRegles := iif( HB_ISARRAY( hJson ), hJson, JGet( hJson, "data" ) )
@@ -427,7 +433,7 @@ STATIC PROCEDURE CopieRegles( cModele, cId )
       xRegles := hJson
    ENDIF
    HttpJson( "PUT", "/monitoring/portfolios/" + cId + "/eventRules/" + cPays, xRegles, @nSt2, @cResp2 )
-   Log( "Copie des regles " + cPays + " depuis " + cModele + " -> " + cId + " : HTTP " + hb_ntos( nSt2 ) + ;
+   CsLog( "Copie des regles " + cPays + " depuis " + cModele + " -> " + cId + " : HTTP " + hb_ntos( nSt2 ) + ;
         iif( nSt2 >= 200 .AND. nSt2 < 300, "", " " + MessageErreur( cResp2 ) ) )
 
    RETURN
@@ -439,7 +445,7 @@ STATIC FUNCTION ListePortefeuilles()
 
    DO WHILE nPage < 100
       IF ! HttpJson( "GET", "/monitoring/portfolios?page=" + hb_ntos( nPage ) + "&pageSize=" + hb_ntos( nSize ), NIL, @nStatus, @cResp, @hJson )
-         Log( "ERREUR lecture des portefeuilles : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
+         CsLog( "ERREUR lecture des portefeuilles : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
          EXIT
       ENDIF
       aP := iif( HB_ISARRAY( hJson ), hJson, JGet( hJson, "portfolios" ) )
@@ -461,7 +467,7 @@ STATIC FUNCTION ListePortefeuilles()
       ENDIF
       nPage++
    ENDDO
-   Log( hb_ntos( Len( hPort ) ) + " portefeuille(s) existant(s) sur le compte" )
+   CsLog( hb_ntos( Len( hPort ) ) + " portefeuille(s) existant(s) sur le compte" )
 
    RETURN hPort
 
@@ -510,7 +516,7 @@ STATIC PROCEDURE RecupereAlertes()
    hPort := ListePortefeuilles()
 
    cDate := Transform( DToS( Date() - nJours ), "@R 9999-99-99" )
-   Log( "Recherche des alertes depuis le " + cDate )
+   CsLog( "Recherche des alertes depuis le " + cDate )
 
    FOR EACH cNom IN hb_HKeys( hPort )
       IF ! Empty( cPrefixe ) .AND. ! Left( cNom, Len( cPrefixe ) ) == cPrefixe
@@ -527,7 +533,7 @@ STATIC PROCEDURE RecupereAlertes()
          cResp   := ""
          hJson   := NIL
          IF ! HttpJson( "GET", cUrl, NIL, @nStatus, @cResp, @hJson )
-            Log( "ERREUR alertes portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
+            CsLog( "ERREUR alertes portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
             EXIT
          ENDIF
          aEv := iif( HB_ISARRAY( hJson ), hJson, JGet( hJson, "data" ) )
@@ -587,7 +593,7 @@ STATIC PROCEDURE RecupereAlertes()
 
    ALERT->( dbCommit() )
    ALERT->( dbCloseArea() )
-   Log( hb_ntos( nTotal ) + " nouvelle(s) alerte(s) enregistree(s) dans " + cFicAl )
+   CsLog( hb_ntos( nTotal ) + " nouvelle(s) alerte(s) enregistree(s) dans " + cFicAl )
 
    RETURN
 
@@ -602,7 +608,7 @@ STATIC PROCEDURE TestConnexion()
    IF Authentifier()
       hPort := ListePortefeuilles()
       FOR EACH k IN hb_HKeys( hPort )
-         Log( "   " + PadR( hPort[ k ], 12 ) + k )
+         CsLog( "   " + PadR( hPort[ k ], 12 ) + k )
       NEXT
    ENDIF
 
@@ -624,7 +630,7 @@ STATIC FUNCTION Authentifier()
       cPass := Cfg( "API", "MOT_DE_PASSE", "" )
    ENDIF
    IF Empty( cUser ) .OR. Empty( cPass )
-      Log( "ERREUR : identifiants Creditsafe absents ([API] UTILISATEUR / MOT_DE_PASSE ou variables CREDITSAFE_USER / CREDITSAFE_PASSWORD)" )
+      CsLog( "ERREUR : identifiants Creditsafe absents ([API] UTILISATEUR / MOT_DE_PASSE ou variables CREDITSAFE_USER / CREDITSAFE_PASSWORD)" )
       RETURN .F.
    ENDIF
 
@@ -633,10 +639,10 @@ STATIC FUNCTION Authentifier()
       s_cToken := ToS( JGet( hJson, "token" ) )
    ENDIF
    IF Empty( s_cToken )
-      Log( "ERREUR authentification Creditsafe : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
+      CsLog( "ERREUR authentification Creditsafe : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
       RETURN .F.
    ENDIF
-   Log( "Authentification Creditsafe OK" )
+   CsLog( "Authentification Creditsafe OK" )
 
    RETURN .T.
 
@@ -686,7 +692,7 @@ STATIC FUNCTION HttpJson( cMethod, cPath, xBody, nStatus, cResp, hJson, lAuth )
       ENDIF
       /* trop de requetes / erreur serveur / reseau -> on reessaie */
       IF ( nStatus == 429 .OR. nStatus >= 500 .OR. nStatus == -1 ) .AND. nEssai <= 3
-         Log( "   HTTP " + hb_ntos( nStatus ) + " sur " + cMethod + " " + cPath + " - nouvel essai dans " + hb_ntos( nEssai * 5 ) + " s" )
+         CsLog( "   HTTP " + hb_ntos( nStatus ) + " sur " + cMethod + " " + cPath + " - nouvel essai dans " + hb_ntos( nEssai * 5 ) + " s" )
          hb_idleSleep( nEssai * 5 )
          LOOP
       ENDIF
@@ -854,11 +860,11 @@ STATIC FUNCTION OuvreOuCree( cFic, aStruct, cAlias )
    BEGIN SEQUENCE WITH {| e | Break( e ) }
       IF ! hb_FileExists( cFic )
          dbCreate( cFic, aStruct )
-         Log( "Fichier cree : " + cFic )
+         CsLog( "Fichier cree : " + cFic )
       ENDIF
       dbUseArea( .T., NIL, cFic, cAlias, .T., .F. )
    RECOVER
-      Log( "ERREUR : impossible d'ouvrir/creer " + cFic )
+      CsLog( "ERREUR : impossible d'ouvrir/creer " + cFic )
       lOk := .F.
    END SEQUENCE
 
@@ -1029,7 +1035,7 @@ STATIC PROCEDURE OuvreLog()
 
    RETURN
 
-STATIC PROCEDURE Log( cMsg )
+STATIC PROCEDURE CsLog( cMsg )
 
    LOCAL cLigne := DToC( Date() ) + " " + Time() + "  " + cMsg
 
