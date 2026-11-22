@@ -5,7 +5,7 @@ Programme Harbour `creditsafe.prg` qui utilise l'API Creditsafe Connect v1 (Glob
 | Commande | Rôle |
 |---|---|
 | `creditsafe TEST` | teste les identifiants et liste les portefeuilles du compte |
-| `creditsafe SURVEIL` | met en surveillance les débiteurs de `DebSiren.dbf` |
+| `creditsafe SURVEIL` | met en surveillance les débiteurs de `DebSiren.dbf` (par SIREN, ou par nom + adresse si le SIREN manque) |
 | `creditsafe ALERTES` | récupère les alertes dans `CsAlertes.dbf` |
 
 Un 2ᵉ argument facultatif indique un autre fichier de paramètres : `creditsafe SURVEIL d:\autre.ini`.
@@ -21,7 +21,7 @@ Le programme utilise `MSXML2.ServerXMLHTTP.6.0` via `hbwin` : rien d'autre à in
 ## Paramétrage : `creditsafe.ini`
 
 Tout est modifiable sans recompiler : le dossier (`\source\creditsafe`), le fichier débiteurs (`DebSiren.dbf`),
-les noms des champs (SIREN, CA, CODERELA, NOM), un filtre facultatif, l'environnement (SANDBOX/LIVE), le préfixe
+les noms des champs (SIREN, CA, CODERELA, NOM, ADRESSE, CP, VILLE), un filtre facultatif, l'environnement (SANDBOX/LIVE), le préfixe
 des portefeuilles, etc. Les identifiants peuvent être mis dans les variables d'environnement
 `CREDITSAFE_USER` / `CREDITSAFE_PASSWORD` plutôt que dans le fichier.
 
@@ -51,7 +51,8 @@ des portefeuilles, etc. Les identifiants peuvent être mis dans les variables d'
 ## Fonctionnement de `SURVEIL`
 
 1. Authentification : `POST /authenticate`, puis jeton `Bearer`, renouvelé automatiquement en cas de 401.
-2. Pour chaque débiteur de `DebSiren.dbf` qui a un SIREN ou un SIRET :
+2. Pour chaque débiteur de `DebSiren.dbf` qui a un SIREN ou un SIRET (ou, sans SIREN, un nom et un code postal
+   ou une ville : voir plus bas) :
    * **série** = 2 premières lettres de `CA`, sinon de `CODERELA`, sinon `SERIE_PAR_DEFAUT` ;
    * **portefeuille** = `PREFIXE_NOM` + série (ex. `DEBITEURS-AB`), créé s'il n'existe pas
      (`POST /monitoring/portfolios`), avec facultativement les e-mails d'alerte et la copie des règles
@@ -66,15 +67,52 @@ des portefeuilles, etc. Les identifiants peuvent être mis dans les variables d'
 |---|---|
 | DATE_TRT, HEURE, MODE | date, heure, REEL ou SIMUL |
 | SERIE, CA, CODERELA, NOM_DEB, DEB_RECNO | débiteur d'origine |
-| SIREN_ORI / SIREN | valeur du fichier / SIREN normalisé |
+| ADR_DEB, CP_DEB, VILLE_DEB | adresse du débiteur (utilisée pour la recherche par nom) |
+| METHODE, SCORE | `SIREN` ou `NOM` ; note de la recherche par nom (sur 100) |
+| SIREN_ORI / SIREN | valeur du fichier (`N:…` = clé nom + adresse) / SIREN normalisé ou trouvé |
 | CS_ID, SAFENO, CS_REGNO | identifiant Creditsafe (connectId), safe number, n° d'immatriculation |
 | CS_NOM, CS_ADRESSE, CS_CP, CS_VILLE, CS_STATUT, CS_TYPE, NB_RESULT | société trouvée |
 | PORTF_NOM, PORTF_ID | portefeuille |
-| STATUT | `AJOUTE`, `DEJA`, `INTROUVABLE`, `INVALIDE`, `ERREUR`, `SIMULE` |
+| STATUT | `AJOUTE`, `DEJA`, `INTROUVABLE`, `INVALIDE`, `ERREUR`, `SIMULE`, `A_VERIFIER` |
 | HTTP, MESSAGE | code retour et message de l'API |
 
 Le programme peut être relancé sans risque. Les couples série + SIREN déjà `AJOUTE`, `DEJA` ou `INVALIDE` (en mode REEL)
 sont ignorés. Les `INTROUVABLE` et `ERREUR` sont retentés.
+
+Un `CsSuivi.dbf` créé par une version précédente reçoit automatiquement les nouveaux champs : l'ancien fichier est
+gardé sous `CsSuivi_av.dbf` et ses enregistrements sont recopiés (le fichier doit être libre à ce moment-là).
+
+## Débiteurs sans SIREN : recherche par nom et adresse
+
+Avec `[RECHERCHE] PAR_NOM=1`, un débiteur sans SIREN est recherché par son nom (`[CHAMPS] NOM`) et son adresse
+(`[CHAMPS] ADRESSE`, `CP`, `VILLE`). Plusieurs champs peuvent être concaténés, par exemple `ADRESSE=ADR1+ADR2`.
+
+1. Il faut un nom et au moins un code postal ou une ville. Sinon le débiteur est ignoré, sauf avec `NOM_SEUL=1`
+   (déconseillé : on obtient trop d'homonymes dans toute la France).
+2. Recherche : `GET /companies?countries=FR&name=<nom>&postCode=<cp>`, puis `&city=<ville>` si rien n'est trouvé.
+   Le nom est envoyé sans accents et sans forme juridique (SARL, SAS, ETS…).
+3. Chaque société trouvée reçoit une **note sur 100** :
+   nom 60 (mots communs, nom contenu dans l'autre, fautes de frappe, nom commercial) + code postal 25
+   (même département : 10) + ville 5 + rue et numéro 10, avec −5 si la société n'est pas active.
+4. Décision :
+
+| Résultat | Statut | Effet |
+|---|---|---|
+| note ≥ `SCORE_AUTO` (80) **et** au moins `ECART_MIN` (10) points devant une autre société (autre SIREN) | `AJOUTE` / `SIMULE` | le SIREN trouvé est relu (choix du siège), puis la société est mise en surveillance |
+| note ≥ `SCORE_MIN` (55) | `A_VERIFIER` | rien n'est ajouté ; la proposition (CS_NOM, SIREN, CS_ID, adresse) et la 2ᵉ société sont dans `CsSuivi.dbf` |
+| sinon | `INTROUVABLE` | la meilleure société est quand même citée dans MESSAGE |
+
+Sans code postal, la note ne peut pas atteindre 80 : un débiteur identifié par sa seule ville part donc toujours
+en `A_VERIFIER`.
+
+**Traiter un `A_VERIFIER`** : contrôler la proposition, puis reporter le SIREN dans `DebSiren.dbf`. Au passage suivant,
+le débiteur est traité comme un débiteur avec SIREN. En mode REEL, les `A_VERIFIER` et `INTROUVABLE` trouvés par nom
+ne sont pas relancés à chaque passage (pour ne pas consommer de recherches). Ils le sont si le nom ou l'adresse du
+débiteur change, ou si la ligne est supprimée de `CsSuivi.dbf`.
+
+Les particuliers n'ont pas de SIREN : sans `FILTRE`, ils sont eux aussi recherchés par nom. Un particulier homonyme
+d'une entreprise individuelle peut alors être proposé. Il vaut donc mieux renseigner `[CHAMPS] FILTRE`
+(ex. `TYPEDEB=="P"`) pour ne garder que les professionnels.
 
 ## Récupérer les alertes
 
