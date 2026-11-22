@@ -82,6 +82,20 @@ sont ignorés. Les `INTROUVABLE` et `ERREUR` sont retentés.
 Un `CsSuivi.dbf` créé par une version précédente reçoit automatiquement les nouveaux champs : l'ancien fichier est
 gardé sous `CsSuivi_av.dbf` et ses enregistrements sont recopiés (le fichier doit être libre à ce moment-là).
 
+## Interrompre un traitement en cours
+
+`SURVEIL` et `ALERTES` peuvent être arrêtés proprement en cours de route :
+
+* **touche Échap** dans la fenêtre du programme ;
+* ou **création du fichier d'arrêt** `creditsafe.stop` dans le dossier des fichiers (`[GENERAL] FICHIER_ARRET`).
+  C'est le moyen à utiliser quand le programme tourne en tâche planifiée, sans fenêtre. Par exemple :
+  `type nul > \source\creditsafe\creditsafe.stop`.
+
+Le débiteur en cours (ou la page d'alertes en cours) est terminé. Le programme s'arrête ensuite normalement :
+fichiers fermés, bilan écrit dans le log, fichier d'arrêt supprimé. Un fichier d'arrêt resté d'une fois précédente
+est supprimé au démarrage. Pour reprendre, il suffit de relancer : en mode REEL, les débiteurs déjà traités
+sont sautés. Éviter Ctrl+C, Alt+C ou la fermeture de la fenêtre, qui coupent le programme sans fermer les fichiers.
+
 ## Débiteurs sans SIREN : recherche par nom et adresse
 
 Avec `[RECHERCHE] PAR_NOM=1`, un débiteur sans SIREN est recherché par son nom (`[CHAMPS] NOM`) et son adresse

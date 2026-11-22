@@ -16,6 +16,7 @@
 
 #include "fileio.ch"
 #include "dbstruct.ch"
+#include "inkey.ch"
 
 REQUEST HB_CODEPAGE_FRWIN
 REQUEST HB_CODEPAGE_FR850
@@ -173,7 +174,13 @@ STATIC PROCEDURE MiseEnSurveillance()
 
    SELECT DEB
    DEB->( dbGoTop() )
+   PrepareArret()
    DO WHILE ! DEB->( Eof() )
+
+      /* Echap ou fichier d'arret : on s'arrete proprement entre deux debiteurs */
+      IF DemandeArret()
+         EXIT
+      ENDIF
 
       IF bFiltre != NIL
          /* LOOP / EXIT interdits dans un BEGIN SEQUENCE : on passe par une variable */
@@ -947,7 +954,7 @@ STATIC PROCEDURE RecupereAlertes()
    LOCAL lNonTrt   := Cfg( "ALERTES", "SEULEMENT_NON_TRAITEES", "1" ) == "1"
    LOCAL nSize     := 100
    LOCAL hPort, hDeja := { => }, lSuivi := .F., cNom, cId, nPage, nStatus, cResp, hJson
-   LOCAL aEv, hEv, cNotif, nNew, nTotal := 0, cUrl, hInfo, cDate, nSt2, cR2
+   LOCAL aEv, hEv, cNotif, nNew, nTotal := 0, cUrl, hInfo, cDate, nSt2, cR2, lArret := .F.
 
    IF ! OuvreAlertes( cFicAl )
       RETURN
@@ -970,14 +977,23 @@ STATIC PROCEDURE RecupereAlertes()
 
    cDate := Transform( DToS( Date() - nJours ), "@R 9999-99-99" )
    CsLog( "Recherche des alertes depuis le " + cDate )
+   PrepareArret()
 
    FOR EACH cNom IN hb_HKeys( hPort )
+      IF lArret
+         EXIT
+      ENDIF
       IF ! Empty( cPrefixe ) .AND. ! Left( cNom, Len( cPrefixe ) ) == cPrefixe
          LOOP
       ENDIF
       cId := hPort[ cNom ]
       nPage := 0
       DO WHILE nPage < 500
+         /* Echap ou fichier d'arret : on s'arrete entre deux pages (les alertes deja lues sont enregistrees) */
+         IF DemandeArret()
+            lArret := .T.
+            EXIT
+         ENDIF
          cUrl := "/monitoring/portfolios/" + cId + "/notificationEvents?startDate=" + cDate + ;
                  "&endDate=" + Transform( DToS( Date() + 1 ), "@R 9999-99-99" ) + ;
                  "&page=" + hb_ntos( nPage ) + "&pageSize=" + hb_ntos( nSize ) + ;
@@ -1626,6 +1642,48 @@ STATIC FUNCTION CheminFichier( cFic )
 
    RETURN hb_DirSepAdd( cDossier ) + cFic
 
+/* ==========================================================================
+ *  INTERRUPTION
+ *  - touche Echap dans la fenetre du programme
+ *  - ou creation du fichier [GENERAL] FICHIER_ARRET (creditsafe.stop), utile en tache planifiee
+ *  Le traitement en cours (debiteur ou page d'alertes) est termine, puis le programme
+ *  s'arrete normalement : fichiers fermes, bilan ecrit dans le log.
+ * ========================================================================== */
+STATIC FUNCTION FichierArret()
+   RETURN CheminFichier( Cfg( "GENERAL", "FICHIER_ARRET", "creditsafe.stop" ) )
+
+/* Au demarrage : supprime un fichier d'arret oublie et vide le tampon clavier */
+STATIC PROCEDURE PrepareArret()
+
+   LOCAL cFic := FichierArret()
+
+   IF hb_FileExists( cFic )
+      FErase( cFic )
+      CsLog( "Ancien fichier d'arret supprime : " + cFic )
+   ENDIF
+   CLEAR TYPEAHEAD
+   CsLog( "Pour interrompre : touche Echap, ou creer le fichier " + cFic )
+
+   RETURN
+
+STATIC FUNCTION DemandeArret()
+
+   LOCAL nTouche, cFic := FichierArret()
+
+   DO WHILE ( nTouche := Inkey() ) != 0
+      IF nTouche == K_ESC
+         CsLog( "*** Interruption demandee (touche Echap) ***" )
+         RETURN .T.
+      ENDIF
+   ENDDO
+   IF hb_FileExists( cFic )
+      FErase( cFic )
+      CsLog( "*** Interruption demandee (fichier " + cFic + ") ***" )
+      RETURN .T.
+   ENDIF
+
+   RETURN .F.
+
 /* Positions des champs "ADR1+ADR2" (ou "ADR1,ADR2") dans l'alias DEB */
 STATIC FUNCTION PosChamps( cListe, cFic )
 
@@ -1791,6 +1849,7 @@ STATIC FUNCTION IniParDefaut()
       "FICHIER_SUIVI=CsSuivi.dbf" + CRLF + ;
       "FICHIER_ALERTES=CsAlertes.dbf" + CRLF + ;
       "FICHIER_LOG=creditsafe.log" + CRLF + ;
+      "FICHIER_ARRET=creditsafe.stop" + CRLF + ;
       "CODEPAGE=FRWIN" + CRLF + ;
       "CODEPAGE_DBF=FR850" + CRLF + ;
       "SIMULATION=1" + CRLF + ;
