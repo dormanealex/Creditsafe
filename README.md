@@ -38,7 +38,8 @@ Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se
 * les questions et les fins de traitement affichent des **boutons cliquables** (Oui / Non, Retour au menu…) ;
 * pendant un traitement, le bouton **Arrêter** (ou Échap) arrête proprement après le débiteur en cours ;
 * la croix de la fenêtre fait de même, puis ferme le programme ;
-* la fenêtre fait 132 colonnes ; agrandir la fenêtre agrandit les caractères.
+* la fenêtre fait 43 lignes de 132 colonnes (police de 18 pixels, réduite automatiquement sur un petit écran) ;
+  agrandir la fenêtre agrandit les caractères.
 
 Lancé par double-clic, le programme ferme la console vide ouverte par Windows. Les lancements avec argument
 (`SURVEIL`, `ALERTES`, `TEST`, donc les tâches planifiées) restent en console, sans fenêtre.

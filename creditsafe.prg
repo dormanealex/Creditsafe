@@ -125,8 +125,9 @@ STATIC PROCEDURE Execute( cMode )
 #define COUL_MENU    "W+/B,N/W,,,W/B"
 #define COUL_BOUTON  "N/W"
 #define COUL_CHOIX   "N/BG"
-#define LIG_BOUTONS  23            /* ligne des boutons / messages en bas d'ecran */
-#define LIG_LOG_FIN  21            /* derniere ligne de la zone de defilement du journal */
+/* positions relatives a la hauteur de l'ecran (43 lignes dans la fenetre, 25 en console) */
+#define LIG_BOUTONS  ( MaxRow() - 1 )   /* ligne des boutons / messages en bas d'ecran */
+#define LIG_LOG_FIN  ( MaxRow() - 3 )   /* derniere ligne de la zone de defilement du journal */
 
 STATIC PROCEDURE MenuPrincipal()
 
@@ -446,7 +447,7 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
  *  Liste a la souris (clic = detail, molette = defilement), detail avec copie du SIREN.
  * ========================================================================== */
 #define LV_HAUT      3           /* premiere ligne du TBrowse (dans le cadre) */
-#define LV_BAS       19          /* derniere ligne du TBrowse */
+#define LV_BAS       ( MaxRow() - 5 )   /* derniere ligne du TBrowse */
 #define COUL_FOND    "W/B"
 #define COUL_TITRE   "N/BG"
 /* TBrowse : 1 normal, 2 ligne choisie, 3 note faible, 4 simulation */
@@ -2738,17 +2739,22 @@ STATIC FUNCTION IniParDefaut()
  * ========================================================================== */
 STATIC PROCEDURE OuvreFenetre()
 
-   LOCAL pGT := hb_gtCreate( "WVT" )
+   LOCAL pGT := hb_gtCreate( "WVT" ), nHaut
 
    IF Empty( pGT )
       RETURN
    ENDIF
    s_pFenetre := pGT
    hb_gtSelect( pGT )
+   /* 43 lignes x 132 colonnes. Police de 18 pixels au plus, reduite si l'ecran est trop petit
+      (marge de 90 pixels pour la barre de titre et la barre des taches) */
+   nHaut := hb_gtInfo( HB_GTI_DESKTOPHEIGHT )
+   nHaut := iif( HB_ISNUMERIC( nHaut ) .AND. nHaut > 0, Min( 18, Int( ( nHaut - 90 ) / 43 ) ), 18 )
+   nHaut := Max( 12, nHaut - nHaut % 2 )
    hb_gtInfo( HB_GTI_FONTNAME, "Consolas" )
-   hb_gtInfo( HB_GTI_FONTSIZE, 18 )
-   hb_gtInfo( HB_GTI_FONTWIDTH, 9 )
-   SetMode( 25, 132 )                        /* 132 colonnes : listes et detail plus larges */
+   hb_gtInfo( HB_GTI_FONTSIZE, nHaut )
+   hb_gtInfo( HB_GTI_FONTWIDTH, nHaut / 2 )
+   SetMode( 43, 132 )
    hb_gtInfo( HB_GTI_WINTITLE, "Creditsafe - surveillance des debiteurs" )
    hb_gtInfo( HB_GTI_RESIZABLE, .T. )      /* agrandir la fenetre agrandit les caracteres */
    hb_gtInfo( HB_GTI_CLOSEMODE, 1 )        /* la croix envoie HB_K_CLOSE : arret propre */
