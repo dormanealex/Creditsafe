@@ -4,11 +4,35 @@ Programme Harbour `creditsafe.prg` qui utilise l'API Creditsafe Connect v1 (Glob
 
 | Commande | Rôle |
 |---|---|
+| `creditsafe` | ouvre le **menu** (toutes les fonctions ci-dessous, plus le bilan, les réglages et le journal) |
 | `creditsafe TEST` | teste les identifiants et liste les portefeuilles du compte |
 | `creditsafe SURVEIL` | met en surveillance les débiteurs de `DebSiren.dbf` (par SIREN, ou par nom + adresse si le SIREN manque) |
 | `creditsafe ALERTES` | récupère les alertes dans `CsAlertes.dbf` |
 
 Un 2ᵉ argument facultatif indique un autre fichier de paramètres : `creditsafe SURVEIL d:\autre.ini`.
+
+**Tâches planifiées** : indiquez toujours la fonction (`creditsafe ALERTES`, `creditsafe SURVEIL`). Sans argument,
+le programme ouvre le menu et attend qu'on appuie sur une touche.
+
+## Menu
+
+`creditsafe` sans argument (ou `creditsafe MENU [fichier.ini]`) affiche l'environnement (SANDBOX/LIVE), le mode
+(simulation ou réel) et le nombre maximum de débiteurs, puis propose :
+
+| Choix | Fonction |
+|---|---|
+| 1 | Tester la connexion Creditsafe (comme `creditsafe TEST`) |
+| 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
+| 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
+| 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
+| 5 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
+| 6 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
+| 7 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
+| 8 | Consulter le journal dans le Bloc-notes |
+| 0 | Quitter (ou Échap) |
+
+On choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 5 et 6 ne modifient pas le fichier `.ini` :
+ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on recharge les paramètres (choix 7).
 
 ## Compilation (Windows)
 

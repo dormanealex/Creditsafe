@@ -4,6 +4,8 @@
  * (API Connect v1 - Global Monitoring) et recuperation des alertes.
  *
  * Utilisation :
+ *    creditsafe                          -> menu (toutes les fonctions)
+ *    creditsafe MENU     [fichier.ini]   -> menu, avec un autre fichier de parametres
  *    creditsafe SURVEIL  [fichier.ini]   -> met les debiteurs en surveillance
  *                                           (par SIREN, ou par nom + adresse si pas de SIREN)
  *    creditsafe ALERTES  [fichier.ini]   -> recupere les alertes (notification events)
@@ -31,12 +33,15 @@ STATIC s_cBaseUrl  := ""
 STATIC s_cToken    := ""
 STATIC s_nLog      := -1
 STATIC s_lSimul    := .F.
+STATIC s_lMenu     := .F.
+STATIC s_hSession  := NIL      /* parametres modifies depuis le menu, pour la session seulement */
 
 /* -------------------------------------------------------------------------- */
 
 PROCEDURE Main( cMode, cIni )
 
-   hb_default( @cMode, "SURVEIL" )
+   /* sans argument : menu. Les taches planifiees doivent indiquer le mode (SURVEIL, ALERTES) */
+   hb_default( @cMode, "MENU" )
    hb_default( @cIni, hb_FNameExtSet( hb_ProgName(), ".ini" ) )
    cMode := Upper( AllTrim( cMode ) )
 
@@ -50,6 +55,24 @@ PROCEDURE Main( cMode, cIni )
    IF ! ChargeConfig( cIni )
       RETURN
    ENDIF
+   AppliqueConfig()
+   OuvreLog()
+
+   IF cMode == "MENU"
+      s_lMenu := .T.
+      MenuPrincipal()
+   ELSE
+      Execute( cMode )
+   ENDIF
+
+   IF s_nLog != -1
+      FClose( s_nLog )
+   ENDIF
+
+   RETURN
+
+/* Codepage, mode simulation et adresse de l'API d'apres les parametres */
+STATIC PROCEDURE AppliqueConfig()
 
    hb_cdpSelect( Cfg( "GENERAL", "CODEPAGE", "FRWIN" ) )
    s_lSimul := Cfg( "GENERAL", "SIMULATION", "0" ) == "1"
@@ -61,8 +84,13 @@ PROCEDURE Main( cMode, cIni )
    IF Right( s_cBaseUrl, 1 ) == "/"
       s_cBaseUrl := hb_StrShrink( s_cBaseUrl, 1 )
    ENDIF
+   s_cToken := ""
 
-   OuvreLog()
+   RETURN
+
+/* Execute une fonction (SURVEIL, ALERTES, TEST) en la tracant dans le log */
+STATIC PROCEDURE Execute( cMode )
+
    CsLog( "===== Debut " + cMode + " - API " + s_cBaseUrl + iif( s_lSimul, " - MODE SIMULATION", "" ) + " =====" )
 
    DO CASE
@@ -73,13 +101,253 @@ PROCEDURE Main( cMode, cIni )
    CASE cMode == "TEST"
       TestConnexion()
    OTHERWISE
-      CsLog( "Mode inconnu : " + cMode + "  (SURVEIL, ALERTES ou TEST)" )
+      CsLog( "Mode inconnu : " + cMode + "  (MENU, SURVEIL, ALERTES ou TEST)" )
    ENDCASE
 
    CsLog( "===== Fin " + cMode + " =====" )
-   IF s_nLog != -1
-      FClose( s_nLog )
+
+   RETURN
+
+/* ==========================================================================
+ *  MENU
+ * ========================================================================== */
+
+STATIC PROCEDURE MenuPrincipal()
+
+   LOCAL nChoix := 1, lFin := .F.
+
+   SetColor( "W+/B,N/W,,,W/B" )
+   DO WHILE ! lFin
+      CLS
+      EnteteMenu()
+      @ 10, 8 PROMPT "1. Tester la connexion Creditsafe                  "
+      @ 11, 8 PROMPT "2. Mettre en surveillance les debiteurs            "
+      @ 12, 8 PROMPT "3. Recuperer les alertes                           "
+      @ 13, 8 PROMPT "4. Bilan du fichier de suivi                       "
+      @ 14, 8 PROMPT "5. Passer en mode " + PadR( iif( s_lSimul, "REEL", "SIMULATION" ), 33 )
+      @ 15, 8 PROMPT "6. Nombre maximum de debiteurs a traiter           "
+      @ 16, 8 PROMPT "7. Modifier les parametres (Bloc-notes)            "
+      @ 17, 8 PROMPT "8. Consulter le journal (Bloc-notes)               "
+      @ 18, 8 PROMPT "0. Quitter                                         "
+      @ 21, 8 SAY "Fleches + Entree ou chiffre. Pendant un traitement, Echap l'interrompt."
+      MENU TO nChoix
+
+      DO CASE
+      CASE nChoix == 0 .OR. nChoix == 9
+         lFin := .T.
+      CASE nChoix == 1
+         LanceFonction( "TEST" )
+      CASE nChoix == 2
+         IF s_lSimul .OR. Confirme( "Mode REEL" + iif( "SANDBOX" $ Upper( s_cBaseUrl ), " (sandbox)", " sur LIVE" ) + ;
+                                    " : les societes seront ajoutees. Continuer ?" )
+            LanceFonction( "SURVEIL" )
+         ENDIF
+      CASE nChoix == 3
+         LanceFonction( "ALERTES" )
+      CASE nChoix == 4
+         BilanSuivi()
+      CASE nChoix == 5
+         IF s_lSimul
+            IF Confirme( "Passer en mode REEL (les societes seront vraiment ajoutees) ?" )
+               CfgSession( "GENERAL", "SIMULATION", "0" )
+            ENDIF
+         ELSE
+            CfgSession( "GENERAL", "SIMULATION", "1" )
+         ENDIF
+      CASE nChoix == 6
+         SaisieMaxDebiteurs()
+      CASE nChoix == 7
+         ModifieParametres()
+      CASE nChoix == 8
+         OuvreBlocNotes( CheminFichier( Cfg( "GENERAL", "FICHIER_LOG", "creditsafe.log" ) ) )
+      ENDCASE
+   ENDDO
+   SetColor( "W/N" )
+   CLS
+
+   RETURN
+
+STATIC PROCEDURE EnteteMenu()
+
+   LOCAL nMax := Val( Cfg( "GENERAL", "MAX_DEBITEURS", "0" ) )
+
+   @ 1, 2 SAY "CREDITSAFE - Surveillance des debiteurs professionnels"
+   @ 2, 2 SAY Replicate( "-", 76 )
+   @ 3, 2 SAY "Parametres    : " + Left( s_cIniFile, 60 )
+   @ 4, 2 SAY "Debiteurs     : " + Left( CheminFichier( Cfg( "GENERAL", "FICHIER_DEBITEURS", "DebSiren.dbf" ) ), 60 )
+   @ 5, 2 SAY "Environnement : " + Upper( Cfg( "API", "ENVIRONNEMENT", "SANDBOX" ) ) + "  (" + s_cBaseUrl + ")"
+   @ 6, 2 SAY "Mode          : " + iif( s_lSimul, "SIMULATION (rien n'est cree chez Creditsafe)", "REEL (les societes sont ajoutees)" ) + ;
+              MarqueSession( "GENERAL", "SIMULATION" )
+   @ 7, 2 SAY "Max debiteurs : " + iif( nMax > 0, hb_ntos( nMax ), "sans limite" ) + MarqueSession( "GENERAL", "MAX_DEBITEURS" )
+   @ 8, 2 SAY Replicate( "-", 76 )
+
+   RETURN
+
+/* "(session)" si le parametre a ete modifie depuis le menu */
+STATIC FUNCTION MarqueSession( cSection, cCle )
+   RETURN iif( HB_ISHASH( s_hSession ) .AND. hb_HHasKey( s_hSession, Upper( cSection + "|" + cCle ) ), ;
+               "  [modifie pour cette session]", "" )
+
+/* Lance une fonction depuis le menu, puis attend une touche */
+STATIC PROCEDURE LanceFonction( cMode )
+
+   SetColor( "W/N" )
+   CLS
+   Execute( cMode )
+   QOut( "" )
+   QOut( "Termine. Appuyez sur une touche pour revenir au menu..." )
+   CLEAR TYPEAHEAD
+   Inkey( 0 )
+   SetColor( "W+/B,N/W,,,W/B" )
+
+   RETURN
+
+STATIC FUNCTION Confirme( cMsg )
+
+   LOCAL nTouche
+
+   @ 23, 0 CLEAR TO 24, 79
+   @ 23, 2 SAY Left( cMsg, 66 ) + " (O/N)"
+   CLEAR TYPEAHEAD
+   nTouche := Inkey( 0 )
+   @ 23, 0 CLEAR TO 24, 79
+
+   RETURN Upper( Chr( nTouche ) ) == "O"
+
+STATIC PROCEDURE SaisieMaxDebiteurs()
+
+   LOCAL nMax := Val( Cfg( "GENERAL", "MAX_DEBITEURS", "0" ) )
+   LOCAL GetList := {}
+
+   @ 23, 0 CLEAR TO 24, 79
+   @ 23, 2 SAY "Nombre maximum de debiteurs (0 = sans limite) :" GET nMax PICTURE "999999" VALID nMax >= 0
+   READ
+   IF LastKey() != K_ESC
+      CfgSession( "GENERAL", "MAX_DEBITEURS", hb_ntos( nMax ) )
    ENDIF
+
+   RETURN
+
+/* Ouvre les parametres dans le Bloc-notes, puis les recharge */
+STATIC PROCEDURE ModifieParametres()
+
+   OuvreBlocNotes( s_cIniFile )
+   @ 23, 0 CLEAR TO 24, 79
+   @ 23, 2 SAY "Fermez le Bloc-notes apres enregistrement, puis appuyez sur une touche."
+   CLEAR TYPEAHEAD
+   Inkey( 0 )
+   IF ChargeConfig( s_cIniFile )
+      s_hSession := NIL
+      AppliqueConfig()
+      CsLog( "Parametres recharges depuis " + s_cIniFile )
+   ENDIF
+
+   RETURN
+
+STATIC PROCEDURE OuvreBlocNotes( cFic )
+
+   IF hb_FileExists( cFic )
+      hb_run( 'start "" notepad.exe "' + cFic + '"' )
+   ELSE
+      Confirme( "Fichier introuvable : " + cFic )
+   ENDIF
+
+   RETURN
+
+/* Modifie un parametre pour la session (le fichier .ini n'est pas modifie) */
+STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
+
+   LOCAL hSec := HGetCI( s_hIni, cSection ), k
+
+   IF ! HB_ISHASH( hSec )
+      hSec := { => }
+      s_hIni[ cSection ] := hSec
+   ENDIF
+   FOR EACH k IN hb_HKeys( hSec )
+      IF HB_ISSTRING( k ) .AND. Lower( k ) == Lower( cCle )
+         cCle := k
+         EXIT
+      ENDIF
+   NEXT
+   hSec[ cCle ] := cVal
+   IF ! HB_ISHASH( s_hSession )
+      s_hSession := { => }
+   ENDIF
+   s_hSession[ Upper( cSection + "|" + cCle ) ] := cVal
+   AppliqueConfig()
+   CsLog( "Parametre modifie pour la session : [" + cSection + "] " + cCle + "=" + cVal )
+
+   RETURN
+
+/* Situation des debiteurs d'apres le fichier de suivi : dernier statut de chaque debiteur, par mode */
+STATIC PROCEDURE BilanSuivi()
+
+   LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_SUIVI", "CsSuivi.dbf" ) )
+   LOCAL hDernier := { => }, hNb := { => }, aStatuts := {}, cCle, cStatut, nLigne, lOk := .T.
+   LOCAL nPosMeth, nNom := 0, c
+
+   SetColor( "W/N" )
+   CLS
+   IF ! hb_FileExists( cFic )
+      QOut( "Fichier de suivi introuvable : " + cFic )
+   ELSE
+      BEGIN SEQUENCE WITH {| e | Break( e ) }
+         dbUseArea( .T., "SIXCDX", cFic, "BILAN", .T., .T., CdpDbf() )
+      RECOVER
+         lOk := .F.
+      END SEQUENCE
+      IF ! lOk
+         QOut( "Impossible d'ouvrir " + cFic )
+      ELSE
+         BILAN->( ordSetFocus( 0 ) )
+         nPosMeth := BILAN->( FieldPos( "METHODE" ) )
+         /* les lignes s'ajoutent a chaque passage : on garde la derniere de chaque debiteur */
+         BILAN->( dbGoTop() )
+         DO WHILE ! BILAN->( Eof() )
+            cCle := AllTrim( BILAN->MODE ) + "|" + BILAN->SERIE + BILAN->SIREN_ORI
+            hDernier[ cCle ] := { AllTrim( BILAN->MODE ), AllTrim( BILAN->STATUT ), ;
+                                  iif( nPosMeth > 0, AllTrim( BILAN->( FieldGet( nPosMeth ) ) ), "" ) }
+            BILAN->( dbSkip() )
+         ENDDO
+         BILAN->( dbCloseArea() )
+
+         FOR EACH c IN hDernier
+            cStatut := c[ 2 ]
+            IF AScan( aStatuts, {| x | x == cStatut } ) == 0
+               AAdd( aStatuts, cStatut )
+            ENDIF
+            hNb[ c[ 1 ] + "|" + cStatut ] := hb_HGetDef( hNb, c[ 1 ] + "|" + cStatut, 0 ) + 1
+            IF c[ 1 ] == "REEL" .AND. c[ 3 ] == "NOM"
+               nNom++
+            ENDIF
+         NEXT
+         ASort( aStatuts )
+
+         QOut( "Bilan du suivi : " + cFic )
+         QOut( "(dernier traitement de chaque debiteur)" )
+         QOut( "" )
+         QOut( PadR( "Statut", 16 ) + PadL( "REEL", 10 ) + PadL( "SIMULATION", 12 ) )
+         QOut( Replicate( "-", 38 ) )
+         FOR EACH cStatut IN aStatuts
+            QOut( PadR( cStatut, 16 ) + Str( hb_HGetDef( hNb, "REEL|" + cStatut, 0 ), 10 ) + ;
+                  Str( hb_HGetDef( hNb, "SIMUL|" + cStatut, 0 ), 12 ) )
+         NEXT
+         IF Empty( aStatuts )
+            QOut( "(aucun debiteur traite)" )
+         ENDIF
+         QOut( "" )
+         QOut( "Dont " + hb_ntos( nNom ) + " debiteur(s) traite(s) en REEL par nom + adresse." )
+         nLigne := AScan( aStatuts, {| x | x == "A_VERIFIER" } )
+         IF nLigne > 0
+            QOut( "A_VERIFIER : controler CS_NOM / SIREN dans le suivi, puis reporter le SIREN dans les debiteurs." )
+         ENDIF
+      ENDIF
+   ENDIF
+   QOut( "" )
+   QOut( "Appuyez sur une touche pour revenir au menu..." )
+   CLEAR TYPEAHEAD
+   Inkey( 0 )
+   SetColor( "W+/B,N/W,,,W/B" )
 
    RETURN
 
@@ -1817,13 +2085,13 @@ STATIC PROCEDURE OuvreLog()
 
    LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_LOG", "creditsafe.log" ) )
 
-   IF hb_FileExists( cFic )
-      s_nLog := FOpen( cFic, FO_READWRITE + FO_SHARED )
-      IF s_nLog != -1
-         FSeek( s_nLog, 0, FS_END )
-      ENDIF
-   ELSE
-      s_nLog := FCreate( cFic )
+   IF ! hb_FileExists( cFic )
+      FClose( FCreate( cFic ) )
+   ENDIF
+   /* ouvert en partage : le journal reste lisible (Bloc-notes) pendant que le programme tourne */
+   s_nLog := FOpen( cFic, FO_READWRITE + FO_SHARED )
+   IF s_nLog != -1
+      FSeek( s_nLog, 0, FS_END )
    ENDIF
 
    RETURN
@@ -1832,7 +2100,11 @@ STATIC PROCEDURE CsLog( cMsg )
 
    LOCAL cLigne := DToC( Date() ) + " " + Time() + "  " + cMsg
 
-   OutStd( cLigne + hb_eol() )
+   IF s_lMenu
+      QOut( cLigne )
+   ELSE
+      OutStd( cLigne + hb_eol() )
+   ENDIF
    IF s_nLog != -1
       FWrite( s_nLog, cLigne + CRLF )
    ENDIF
