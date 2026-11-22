@@ -93,6 +93,8 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL cChCA     := Cfg( "CHAMPS", "CA", "CA" )
    LOCAL cChRela   := Cfg( "CHAMPS", "CODERELA", "CODERELA" )
    LOCAL cChNom    := Cfg( "CHAMPS", "NOM", "NOM" )
+   LOCAL cChLimite := Cfg( "CHAMPS", "LIMITE", "" )
+   LOCAL nPosLim   := 0
    LOCAL cFiltre   := Cfg( "CHAMPS", "FILTRE", "" )
    LOCAL lLuhn     := Cfg( "CHAMPS", "CONTROLE_LUHN", "1" ) == "1"
    LOCAL nMax      := Val( Cfg( "GENERAL", "MAX_DEBITEURS", "0" ) )
@@ -126,6 +128,9 @@ STATIC PROCEDURE MiseEnSurveillance()
    nPosCA    := DEB->( FieldPos( cChCA ) )
    nPosRela  := DEB->( FieldPos( cChRela ) )
    nPosNom   := DEB->( FieldPos( cChNom ) )
+   IF ! Empty( cChLimite )
+      nPosLim := DEB->( FieldPos( cChLimite ) )
+   ENDIF
    IF nPosSiren == 0
       CsLog( "ERREUR : champ " + cChSiren + " absent de " + cFicDeb + " (voir [CHAMPS] SIREN=)" )
       DEB->( dbCloseArea() )
@@ -201,6 +206,7 @@ STATIC PROCEDURE MiseEnSurveillance()
       hVu[ cCle ] := .T.
 
       hRes := { "SERIE" => cSerie, "CA" => cCA, "CODERELA" => cRela, "NOM_DEB" => cNom, ;
+                "LIMITE" => iif( nPosLim > 0, DEB->( FieldGet( nPosLim ) ), NIL ), ;
                 "SIREN_ORI" => cSirenOri, "SIREN" => cSiren, "DEB_RECNO" => DEB->( RecNo() ), ;
                 "STATUT" => "", "HTTP" => 0, "MESSAGE" => "" }
 
@@ -347,7 +353,8 @@ STATIC PROCEDURE AjouteSociete( cPortId, hRes )
 
    hBody := { "id" => hRes[ "CS_ID" ], ;
               "personalReference" => Left( iif( Empty( hRes[ "CA" ] ), hRes[ "CODERELA" ], hRes[ "CA" ] ), 50 ), ;
-              "freeText" => Left( hRes[ "NOM_DEB" ], 100 ) }
+              "freeText" => Left( hRes[ "NOM_DEB" ], 100 ), ;
+              "personalLimit" => LimitePerso( hRes[ "LIMITE" ] ) }
 
    HttpSchema( "POST", "/monitoring/portfolios/" + cPortId + "/companies", hBody, @nStatus, @cResp, @hJson )
    hRes[ "HTTP" ] := nStatus
@@ -709,6 +716,32 @@ STATIC FUNCTION HttpSchema( cMethod, cPath, hBody, nStatus, cResp, hJson )
       IF lOk .OR. nStatus != 400 .OR. ! HB_ISHASH( hBody )
          EXIT
       ENDIF
+      /* propriete obligatoire manquante -> ajoutee vide */
+      nPos := At( "MISSING REQUIRED PROPERTIES", Upper( cResp ) )
+      IF nPos > 0
+         cListe := SubStr( cResp, nPos )
+         cListe := SubStr( cListe, At( "[", cListe ) + 1 )
+         cListe := Left( cListe, At( "]", cListe ) - 1 )
+         lRetire := .F.
+         FOR EACH cProp IN hb_ATokens( StrTran( StrTran( cListe, '\"', "" ), '"', "" ), "," )
+            cProp := AllTrim( cProp )
+            IF ! Empty( cProp ) .AND. ! hb_HHasKey( hBody, cProp )
+               hBody[ cProp ] := ""
+               CsLog( "   champ obligatoire '" + cProp + "' ajoute (vide) sur " + cPath )
+               lRetire := .T.
+            ENDIF
+         NEXT
+         IF lRetire
+            LOOP
+         ENDIF
+         EXIT
+      ENDIF
+      /* personalLimit attendu en nombre -> conversion */
+      IF "INSTANCE TYPE" $ Upper( cResp ) .AND. hb_HHasKey( hBody, "personalLimit" ) .AND. HB_ISSTRING( hBody[ "personalLimit" ] )
+         hBody[ "personalLimit" ] := Val( hBody[ "personalLimit" ] )
+         CsLog( "   personalLimit envoye en numerique sur " + cPath )
+         LOOP
+      ENDIF
       nPos := At( "NOT ALLOWED BY THE SCHEMA", Upper( cResp ) )
       IF nPos == 0
          EXIT
@@ -731,6 +764,22 @@ STATIC FUNCTION HttpSchema( cMethod, cPath, hBody, nStatus, cResp, hJson )
    NEXT
 
    RETURN lOk
+
+/* personalLimit (obligatoire pour l'API) : champ [CHAMPS] LIMITE du debiteur,
+   sinon [PORTEFEUILLE] LIMITE_PERSONNELLE, sinon chaine vide */
+STATIC FUNCTION LimitePerso( xLimite )
+
+   LOCAL cVal
+
+   IF HB_ISNUMERIC( xLimite ) .AND. xLimite > 0
+      RETURN hb_ntos( Int( xLimite ) )
+   ENDIF
+   IF HB_ISSTRING( xLimite ) .AND. ! Empty( Chiffres( xLimite ) )
+      RETURN Chiffres( xLimite )
+   ENDIF
+   cVal := Chiffres( Cfg( "PORTEFEUILLE", "LIMITE_PERSONNELLE", "" ) )
+
+   RETURN cVal
 
 STATIC FUNCTION MessageErreur( cResp )
 
@@ -1154,6 +1203,7 @@ STATIC FUNCTION IniParDefaut()
       "CA=CA" + CRLF + ;
       "CODERELA=CODERELA" + CRLF + ;
       "NOM=NOM" + CRLF + ;
+      "LIMITE=" + CRLF + ;
       "FILTRE=" + CRLF + ;
       "CONTROLE_LUHN=1" + CRLF + CRLF + ;
       "[API]" + CRLF + ;
@@ -1167,6 +1217,7 @@ STATIC FUNCTION IniParDefaut()
       "[PORTEFEUILLE]" + CRLF + ;
       "PREFIXE_NOM=DEBITEURS-" + CRLF + ;
       "SERIE_PAR_DEFAUT=ZZ" + CRLF + ;
+      "LIMITE_PERSONNELLE=" + CRLF + ;
       "EMAILS=" + CRLF + ;
       "PORTEFEUILLE_MODELE_REGLES=" + CRLF + ;
       "PAYS_REGLES=FR" + CRLF + CRLF + ;
