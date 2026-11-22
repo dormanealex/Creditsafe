@@ -398,6 +398,14 @@ STATIC FUNCTION CreePortefeuille( cNom, cSerie )
 
    IF ! HttpSchema( "POST", "/monitoring/portfolios", hBody, @nStatus, @cResp, @hJson )
       CsLog( "ERREUR creation portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
+      IF nStatus == 409
+         /* existe deja : on retrouve son identifiant dans le suivi */
+         cId := PortefeuilleSuivi( cNom )
+         IF ! Empty( cId )
+            CsLog( "   portefeuille " + cNom + " existant, id " + cId + " (repris du fichier de suivi)" )
+         ENDIF
+         RETURN cId
+      ENDIF
       RETURN ""
    ENDIF
 
@@ -442,23 +450,39 @@ STATIC PROCEDURE CopieRegles( cModele, cId )
 STATIC FUNCTION ListePortefeuilles()
 
    LOCAL hPort := { => }, nPage := 0, nSize := 100, nStatus := 0, cResp := "", hJson, aP, hP, nNew
+   LOCAL cNom, cId, cPremiere := "", lPage1Essayee := .F.
 
    DO WHILE nPage < 100
       IF ! HttpJson( "GET", "/monitoring/portfolios?page=" + hb_ntos( nPage ) + "&pageSize=" + hb_ntos( nSize ), NIL, @nStatus, @cResp, @hJson )
          CsLog( "ERREUR lecture des portefeuilles : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
          EXIT
       ENDIF
-      aP := iif( HB_ISARRAY( hJson ), hJson, JGet( hJson, "portfolios" ) )
-      IF ! HB_ISARRAY( aP )
-         aP := JGet( hJson, "data" )
+      IF Empty( cPremiere )
+         cPremiere := cResp
       ENDIF
-      IF ! HB_ISARRAY( aP ) .OR. Empty( aP )
+      /* tableau d'objets contenant "portfolioId", ou qu'il soit dans la reponse */
+      aP := JFindTableau( hJson, "portfolioId" )
+      IF Empty( aP )
+         aP := JFindTableau( hJson, "id" )
+      ENDIF
+      IF Empty( aP )
+         /* pagination a partir de 1 ? */
+         IF nPage == 0 .AND. ! lPage1Essayee
+            lPage1Essayee := .T.
+            nPage := 1
+            LOOP
+         ENDIF
          EXIT
       ENDIF
       nNew := 0
       FOR EACH hP IN aP
-         IF ! hb_HHasKey( hPort, Upper( AllTrim( ToS( JGet( hP, "name" ) ) ) ) )
-            hPort[ Upper( AllTrim( ToS( JGet( hP, "name" ) ) ) ) ] := ToS( JGet( hP, "portfolioId" ) )
+         cNom := Upper( AllTrim( ToS( JGet( hP, "name" ) ) ) )
+         cId  := ToS( JGet( hP, "portfolioId" ) )
+         IF Empty( cId )
+            cId := ToS( JGet( hP, "id" ) )
+         ENDIF
+         IF ! Empty( cNom ) .AND. ! hb_HHasKey( hPort, cNom )
+            hPort[ cNom ] := cId
             nNew++
          ENDIF
       NEXT
@@ -468,8 +492,32 @@ STATIC FUNCTION ListePortefeuilles()
       nPage++
    ENDDO
    CsLog( hb_ntos( Len( hPort ) ) + " portefeuille(s) existant(s) sur le compte" )
+   IF Empty( hPort ) .AND. ! Empty( cPremiere )
+      /* diagnostic : debut de la reponse brute */
+      CsLog( "   reponse /monitoring/portfolios : " + Left( StrTran( StrTran( cPremiere, Chr( 13 ), " " ), Chr( 10 ), " " ), 400 ) )
+   ENDIF
 
    RETURN hPort
+
+/* Portefeuille deja connu dans le fichier de suivi (PORTF_NOM -> PORTF_ID) */
+STATIC FUNCTION PortefeuilleSuivi( cNom )
+
+   LOCAL cId := ""
+
+   IF Select( "SUIVI" ) == 0
+      RETURN ""
+   ENDIF
+   SUIVI->( ordSetFocus( "PORTF" ) )
+   SUIVI->( dbSeek( PadR( cNom, 50 ) ) )
+   DO WHILE ! SUIVI->( Eof() ) .AND. Upper( AllTrim( SUIVI->PORTF_NOM ) ) == Upper( cNom )
+      IF ! Empty( SUIVI->PORTF_ID ) .AND. ! Left( SUIVI->PORTF_ID, 5 ) == "SIMUL"
+         cId := AllTrim( SUIVI->PORTF_ID )
+         EXIT
+      ENDIF
+      SUIVI->( dbSkip() )
+   ENDDO
+
+   RETURN cId
 
 /* ==========================================================================
  *  2) RECUPERATION DES ALERTES
@@ -819,6 +867,32 @@ STATIC FUNCTION JGet( x, ... )
    NEXT
 
    RETURN x
+
+/* Recherche recursive du premier tableau d'objets dont le 1er element contient cKey */
+STATIC FUNCTION JFindTableau( x, cKey )
+
+   LOCAL v, r
+
+   IF HB_ISARRAY( x )
+      IF ! Empty( x ) .AND. HB_ISHASH( x[ 1 ] ) .AND. HGetCI( x[ 1 ], cKey ) != NIL
+         RETURN x
+      ENDIF
+      FOR EACH v IN x
+         r := JFindTableau( v, cKey )
+         IF ! Empty( r )
+            RETURN r
+         ENDIF
+      NEXT
+   ELSEIF HB_ISHASH( x )
+      FOR EACH v IN x
+         r := JFindTableau( v, cKey )
+         IF ! Empty( r )
+            RETURN r
+         ENDIF
+      NEXT
+   ENDIF
+
+   RETURN {}
 
 /* Recherche recursive d'une cle a n'importe quel niveau */
 STATIC FUNCTION JFind( x, cKey )
