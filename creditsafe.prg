@@ -220,15 +220,16 @@ STATIC PROCEDURE MiseEnSurveillance()
          cPortId := hPort[ Upper( cPortNom ) ]
       ELSE
          cPortId := CreePortefeuille( cPortNom, cSerie )
-         IF Empty( cPortId )
-            hRes[ "STATUT" ]  := "ERREUR"
-            hRes[ "MESSAGE" ] := "Creation du portefeuille " + cPortNom + " impossible"
-            EcritSuivi( hRes )
-            Compte( hStat, "ERREUR" )
-            DEB->( dbSkip() )
-            LOOP
-         ENDIF
+         /* memorise meme en cas d'echec ("") : un seul essai de creation par passage */
          hPort[ Upper( cPortNom ) ] := cPortId
+      ENDIF
+      IF Empty( cPortId )
+         hRes[ "STATUT" ]  := "ERREUR"
+         hRes[ "MESSAGE" ] := "Creation du portefeuille " + cPortNom + " impossible"
+         EcritSuivi( hRes )
+         Compte( hStat, "ERREUR" )
+         DEB->( dbSkip() )
+         LOOP
       ENDIF
       hRes[ "PORTF_ID" ] := cPortId
 
@@ -348,7 +349,7 @@ STATIC PROCEDURE AjouteSociete( cPortId, hRes )
               "personalReference" => Left( iif( Empty( hRes[ "CA" ] ), hRes[ "CODERELA" ], hRes[ "CA" ] ), 50 ), ;
               "freeText" => Left( hRes[ "NOM_DEB" ], 100 ) }
 
-   HttpJson( "POST", "/monitoring/portfolios/" + cPortId + "/companies", hBody, @nStatus, @cResp, @hJson )
+   HttpSchema( "POST", "/monitoring/portfolios/" + cPortId + "/companies", hBody, @nStatus, @cResp, @hJson )
    hRes[ "HTTP" ] := nStatus
 
    DO CASE
@@ -383,13 +384,12 @@ STATIC FUNCTION CreePortefeuille( cNom, cSerie )
       ENDIF
    NEXT
 
-   hBody := { "name" => cNom, ;
-              "information" => "Debiteurs serie " + cSerie + " - cree automatiquement le " + DToC( Date() ) }
+   hBody := { "name" => cNom }
    IF ! Empty( aMails )
       hBody[ "emails" ] := aMails
    ENDIF
 
-   IF ! HttpJson( "POST", "/monitoring/portfolios", hBody, @nStatus, @cResp, @hJson )
+   IF ! HttpSchema( "POST", "/monitoring/portfolios", hBody, @nStatus, @cResp, @hJson )
       CsLog( "ERREUR creation portefeuille " + cNom + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ) )
       RETURN ""
    ENDIF
@@ -697,6 +697,40 @@ STATIC FUNCTION HttpJson( cMethod, cPath, xBody, nStatus, cResp, hJson, lAuth )
    ENDIF
 
    RETURN nStatus >= 200 .AND. nStatus < 300
+
+/* Comme HttpJson, mais si l'API repond 400 "properties which are not allowed by the schema: [...]"
+   on retire ces proprietes du corps et on renvoie la requete (3 essais maximum). */
+STATIC FUNCTION HttpSchema( cMethod, cPath, hBody, nStatus, cResp, hJson )
+
+   LOCAL lOk, nEssai, nPos, cListe, cProp, lRetire
+
+   FOR nEssai := 1 TO 3
+      lOk := HttpJson( cMethod, cPath, hBody, @nStatus, @cResp, @hJson )
+      IF lOk .OR. nStatus != 400 .OR. ! HB_ISHASH( hBody )
+         EXIT
+      ENDIF
+      nPos := At( "NOT ALLOWED BY THE SCHEMA", Upper( cResp ) )
+      IF nPos == 0
+         EXIT
+      ENDIF
+      cListe := SubStr( cResp, nPos )
+      cListe := SubStr( cListe, At( "[", cListe ) + 1 )
+      cListe := Left( cListe, At( "]", cListe ) - 1 )
+      lRetire := .F.
+      FOR EACH cProp IN hb_ATokens( StrTran( StrTran( cListe, '\"', "" ), '"', "" ), "," )
+         cProp := AllTrim( cProp )
+         IF ! Empty( cProp ) .AND. hb_HHasKey( hBody, cProp )
+            hb_HDel( hBody, cProp )
+            CsLog( "   champ '" + cProp + "' refuse par l'API sur " + cPath + " : retire" )
+            lRetire := .T.
+         ENDIF
+      NEXT
+      IF ! lRetire
+         EXIT
+      ENDIF
+   NEXT
+
+   RETURN lOk
 
 STATIC FUNCTION MessageErreur( cResp )
 
