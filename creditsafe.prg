@@ -528,7 +528,7 @@ STATIC PROCEDURE ListeAVerifier()
    devient la ligne courante. Renvoie .F. si la souris n'est pas sur une ligne de donnees. */
 STATIC FUNCTION LigneSouris( oB, nNb, nPos )
 
-   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nLig, nIndex
+   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nLig, nIndex, nAvant := 0
 
    IF MRow() < nPremiere .OR. MRow() > oB:nBottom .OR. MCol() < oB:nLeft .OR. MCol() > oB:nRight
       RETURN .F.
@@ -538,9 +538,19 @@ STATIC FUNCTION LigneSouris( oB, nNb, nPos )
    IF nIndex < 1 .OR. nIndex > nNb
       RETURN .F.
    ENDIF
-   /* meme premiere ligne affichee : seuls la position et le pointeur changent */
-   nPos      := nIndex
-   oB:rowPos := nLig
+   /* deplacement par le TBrowse lui-meme (comme TBMouse) : le pointeur nPos suit.
+      Modifier nPos et rowPos directement faisait sauter 2 lignes au reaffichage. */
+   DO WHILE oB:rowPos < nLig .AND. nAvant != nPos
+      nAvant := nPos                /* garde-fou : on s'arrete si le TBrowse ne bouge plus */
+      oB:down()
+      oB:forceStable()
+   ENDDO
+   nAvant := 0
+   DO WHILE oB:rowPos > nLig .AND. nAvant != nPos
+      nAvant := nPos
+      oB:up()
+      oB:forceStable()
+   ENDDO
 
    RETURN .T.
 
