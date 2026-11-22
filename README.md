@@ -31,7 +31,18 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 8 | Consulter le journal dans le Bloc-notes |
 | 0 | Quitter (ou Échap) |
 
-On choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 5 et 6 ne modifient pas le fichier `.ini` :
+Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se pilote **à la souris** :
+
+* un clic sur un choix le lance (le survol le met en surbrillance) ;
+* les questions et les fins de traitement affichent des **boutons cliquables** (Oui / Non, Retour au menu…) ;
+* pendant un traitement, le bouton **Arrêter** (ou Échap) arrête proprement après le débiteur en cours ;
+* la croix de la fenêtre fait de même, puis ferme le programme ;
+* agrandir la fenêtre agrandit les caractères.
+
+Lancé par double-clic, le programme ferme la console vide ouverte par Windows. Les lancements avec argument
+(`SURVEIL`, `ALERTES`, `TEST`, donc les tâches planifiées) restent en console, sans fenêtre.
+
+Au clavier, on choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 5 et 6 ne modifient pas le fichier `.ini` :
 ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on recharge les paramètres (choix 7).
 
 ## Compilation (Windows)

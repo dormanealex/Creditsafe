@@ -19,11 +19,17 @@
 #include "fileio.ch"
 #include "dbstruct.ch"
 #include "inkey.ch"
+#include "hbgtinfo.ch"
 
 REQUEST HB_CODEPAGE_FRWIN
 REQUEST HB_CODEPAGE_FR850
 REQUEST HB_CODEPAGE_FRISO
 REQUEST SIXCDX
+#if defined( __PLATFORM__WINDOWS )
+   /* menu dans une fenetre Windows (GTWVT) ; SURVEIL / ALERTES / TEST restent en console (GTWIN) */
+   REQUEST HB_GT_WVT
+   REQUEST HB_GT_WIN_DEFAULT
+#endif
 
 #define CRLF  Chr( 13 ) + Chr( 10 )
 
@@ -35,6 +41,8 @@ STATIC s_nLog      := -1
 STATIC s_lSimul    := .F.
 STATIC s_lMenu     := .F.
 STATIC s_hSession  := NIL      /* parametres modifies depuis le menu, pour la session seulement */
+STATIC s_pFenetre  := NIL      /* fenetre GTWVT du menu */
+STATIC s_lFermer   := .F.      /* clic sur la croix de la fenetre */
 
 /* -------------------------------------------------------------------------- */
 
@@ -112,29 +120,38 @@ STATIC PROCEDURE Execute( cMode )
  *  MENU
  * ========================================================================== */
 
+#define COUL_MENU    "W+/B,N/W,,,W/B"
+#define COUL_BOUTON  "N/W"
+#define COUL_CHOIX   "N/BG"
+#define LIG_BOUTONS  23            /* ligne des boutons / messages en bas d'ecran */
+#define LIG_LOG_FIN  21            /* derniere ligne de la zone de defilement du journal */
+
 STATIC PROCEDURE MenuPrincipal()
 
-   LOCAL nChoix := 1, lFin := .F.
+   LOCAL nChoix := 1, lFin := .F., aItems
 
-   SetColor( "W+/B,N/W,,,W/B" )
-   DO WHILE ! lFin
+   OuvreFenetre()
+   Set( _SET_EVENTMASK, HB_INKEY_ALL )
+   SetColor( COUL_MENU )
+   DO WHILE ! lFin .AND. ! s_lFermer
       CLS
       EnteteMenu()
-      @ 10, 8 PROMPT "1. Tester la connexion Creditsafe                  "
-      @ 11, 8 PROMPT "2. Mettre en surveillance les debiteurs            "
-      @ 12, 8 PROMPT "3. Recuperer les alertes                           "
-      @ 13, 8 PROMPT "4. Bilan du fichier de suivi                       "
-      @ 14, 8 PROMPT "5. Passer en mode " + PadR( iif( s_lSimul, "REEL", "SIMULATION" ), 33 )
-      @ 15, 8 PROMPT "6. Nombre maximum de debiteurs a traiter           "
-      @ 16, 8 PROMPT "7. Modifier les parametres (Bloc-notes)            "
-      @ 17, 8 PROMPT "8. Consulter le journal (Bloc-notes)               "
-      @ 18, 8 PROMPT "0. Quitter                                         "
-      @ 21, 8 SAY "Fleches + Entree ou chiffre. Pendant un traitement, Echap l'interrompt."
-      MENU TO nChoix
+      aItems := { "1. Tester la connexion Creditsafe", ;
+                  "2. Mettre en surveillance les debiteurs", ;
+                  "3. Recuperer les alertes", ;
+                  "4. Bilan du fichier de suivi", ;
+                  "5. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
+                  "6. Nombre maximum de debiteurs a traiter", ;
+                  "7. Modifier les parametres (Bloc-notes)", ;
+                  "8. Consulter le journal (Bloc-notes)", ;
+                  "0. Quitter" }
+      @ 21, 8 SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
+      nChoix := ChoixMenu( aItems, 10, 8, 52, nChoix )
 
       DO CASE
-      CASE nChoix == 0 .OR. nChoix == 9
+      CASE nChoix == 0 .OR. nChoix == 9 .OR. s_lFermer
          lFin := .T.
+         nChoix := 1
       CASE nChoix == 1
          LanceFonction( "TEST" )
       CASE nChoix == 2
@@ -164,6 +181,121 @@ STATIC PROCEDURE MenuPrincipal()
    ENDDO
    SetColor( "W/N" )
    CLS
+   Set( _SET_EVENTMASK, INKEY_KEYBOARD )
+
+   RETURN
+
+/* Liste de choix : clic gauche (ou survol pour se placer), fleches + Entree, ou premier caractere.
+   Renvoie le numero du choix, 0 si Echap ou clic droit. */
+STATIC FUNCTION ChoixMenu( aItems, nLig, nCol, nLarg, nChoix )
+
+   LOCAL nNb := Len( aItems ), nTouche, i, nAff := -1, cCar
+
+   DO WHILE .T.
+      IF nAff != nChoix
+         FOR i := 1 TO nNb
+            @ nLig + i - 1, nCol SAY PadR( " " + aItems[ i ], nLarg ) COLOR iif( i == nChoix, COUL_CHOIX, "W+/B" )
+         NEXT
+         nAff := nChoix
+      ENDIF
+      nTouche := Inkey( 0, INKEY_ALL )
+      DO CASE
+      CASE nTouche == K_MOUSEMOVE .OR. nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
+         i := MRow() - nLig + 1
+         IF i >= 1 .AND. i <= nNb .AND. MCol() >= nCol .AND. MCol() < nCol + nLarg
+            nChoix := i
+            IF nTouche != K_MOUSEMOVE
+               RETURN nChoix
+            ENDIF
+         ENDIF
+      CASE nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+         RETURN 0
+      CASE nTouche == K_RBUTTONDOWN .OR. nTouche == K_ESC
+         RETURN 0
+      CASE nTouche == K_UP
+         nChoix := iif( nChoix > 1, nChoix - 1, nNb )
+      CASE nTouche == K_DOWN
+         nChoix := iif( nChoix < nNb, nChoix + 1, 1 )
+      CASE nTouche == K_HOME
+         nChoix := 1
+      CASE nTouche == K_END
+         nChoix := nNb
+      CASE nTouche == K_ENTER
+         RETURN nChoix
+      CASE nTouche >= 32 .AND. nTouche <= 255
+         cCar := Upper( Chr( nTouche ) )
+         i := AScan( aItems, {| c | Upper( Left( c, 1 ) ) == cCar } )
+         IF i > 0
+            RETURN i
+         ENDIF
+      ENDCASE
+   ENDDO
+
+   RETURN 0
+
+/* Message et boutons cliquables en bas d'ecran. Renvoie le numero du bouton, 0 si Echap.
+   aTouches : touche de chaque bouton (ex. { "O", "N" }) ; NIL = n'importe quelle touche choisit le bouton 1.
+   nDefaut  : bouton choisi par Entree. */
+STATIC FUNCTION Boutons( cMsg, aBoutons, aTouches, nDefaut )
+
+   LOCAL aPos := {}, nCol := 2, i, nTouche, c, cCoul := SetColor()
+
+   hb_default( @nDefaut, 1 )
+   @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
+   @ LIG_BOUTONS, 2 SAY Left( cMsg, MaxCol() - 3 )
+   FOR EACH c IN aBoutons
+      AAdd( aPos, nCol )
+      @ LIG_BOUTONS + 1, nCol SAY " " + c + " " COLOR COUL_BOUTON
+      nCol += Len( c ) + 4
+   NEXT
+   CLEAR TYPEAHEAD
+   DO WHILE .T.
+      nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
+      DO CASE
+      CASE nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+         i := 0
+         EXIT
+      CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
+         IF MRow() == LIG_BOUTONS + 1
+            FOR i := 1 TO Len( aBoutons )
+               IF MCol() >= aPos[ i ] .AND. MCol() < aPos[ i ] + Len( aBoutons[ i ] ) + 2
+                  EXIT
+               ENDIF
+            NEXT
+            IF i <= Len( aBoutons )
+               EXIT
+            ENDIF
+         ENDIF
+      CASE nTouche >= 1000     /* autres evenements (focus, redimensionnement...) */
+         LOOP
+      CASE aTouches == NIL
+         i := 1
+         EXIT
+      CASE nTouche == K_ESC
+         i := 0
+         EXIT
+      CASE nTouche == K_ENTER
+         i := nDefaut
+         EXIT
+      CASE nTouche >= 32 .AND. nTouche <= 255
+         c := Upper( Chr( nTouche ) )
+         i := AScan( aTouches, {| t | t == c } )
+         IF i > 0
+            EXIT
+         ENDIF
+      ENDCASE
+   ENDDO
+   SetColor( cCoul )
+   @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
+
+   RETURN i
+
+/* Attend un clic sur le bouton ou une touche */
+STATIC PROCEDURE Attente( cMsg, cBouton )
+
+   Boutons( cMsg, { cBouton } )
 
    RETURN
 
@@ -188,54 +320,59 @@ STATIC FUNCTION MarqueSession( cSection, cCle )
    RETURN iif( HB_ISHASH( s_hSession ) .AND. hb_HHasKey( s_hSession, Upper( cSection + "|" + cCle ) ), ;
                "  [modifie pour cette session]", "" )
 
-/* Lance une fonction depuis le menu, puis attend une touche */
+/* Lance une fonction depuis le menu : le journal defile en haut, bouton Arreter en bas */
 STATIC PROCEDURE LanceFonction( cMode )
 
    SetColor( "W/N" )
    CLS
+   @ LIG_BOUTONS, 2 SAY " Arreter " COLOR COUL_BOUTON
+   @ LIG_BOUTONS, 13 SAY "(ou touche Echap) : arret propre apres le debiteur en cours"
    Execute( cMode )
-   QOut( "" )
-   QOut( "Termine. Appuyez sur une touche pour revenir au menu..." )
-   CLEAR TYPEAHEAD
-   Inkey( 0 )
-   SetColor( "W+/B,N/W,,,W/B" )
+   IF ! s_lFermer
+      Attente( "Termine.", "Retour au menu" )
+   ENDIF
+   SetColor( COUL_MENU )
 
    RETURN
 
 STATIC FUNCTION Confirme( cMsg )
+   RETURN Boutons( cMsg, { "Oui", "Non" }, { "O", "N" }, 2 ) == 1
 
-   LOCAL nTouche
-
-   @ 23, 0 CLEAR TO 24, 79
-   @ 23, 2 SAY Left( cMsg, 66 ) + " (O/N)"
-   CLEAR TYPEAHEAD
-   nTouche := Inkey( 0 )
-   @ 23, 0 CLEAR TO 24, 79
-
-   RETURN Upper( Chr( nTouche ) ) == "O"
-
+/* Nombre maximum de debiteurs : boutons pour les valeurs courantes, saisie pour une autre valeur */
 STATIC PROCEDURE SaisieMaxDebiteurs()
 
    LOCAL nMax := Val( Cfg( "GENERAL", "MAX_DEBITEURS", "0" ) )
+   LOCAL aVal := { 10, 50, 100, 0 }, nBouton
    LOCAL GetList := {}
 
-   @ 23, 0 CLEAR TO 24, 79
-   @ 23, 2 SAY "Nombre maximum de debiteurs (0 = sans limite) :" GET nMax PICTURE "999999" VALID nMax >= 0
-   READ
-   IF LastKey() != K_ESC
-      CfgSession( "GENERAL", "MAX_DEBITEURS", hb_ntos( nMax ) )
-   ENDIF
+   nBouton := Boutons( "Nombre maximum de debiteurs a traiter (actuellement : " + ;
+                       iif( nMax > 0, hb_ntos( nMax ), "sans limite" ) + ")", ;
+                       { "10", "50", "100", "Sans limite", "Autre...", "Annuler" }, ;
+                       { "", "", "", "S", "A", "N" }, 6 )
+   DO CASE
+   CASE nBouton >= 1 .AND. nBouton <= 4
+      CfgSession( "GENERAL", "MAX_DEBITEURS", hb_ntos( aVal[ nBouton ] ) )
+   CASE nBouton == 5
+      @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
+      @ LIG_BOUTONS, 2 SAY "Nombre maximum de debiteurs (0 = sans limite) :" GET nMax PICTURE "999999" VALID nMax >= 0
+      READ
+      IF LastKey() != K_ESC
+         CfgSession( "GENERAL", "MAX_DEBITEURS", hb_ntos( nMax ) )
+      ENDIF
+   ENDCASE
 
    RETURN
 
 /* Ouvre les parametres dans le Bloc-notes, puis les recharge */
 STATIC PROCEDURE ModifieParametres()
 
-   OuvreBlocNotes( s_cIniFile )
-   @ 23, 0 CLEAR TO 24, 79
-   @ 23, 2 SAY "Fermez le Bloc-notes apres enregistrement, puis appuyez sur une touche."
-   CLEAR TYPEAHEAD
-   Inkey( 0 )
+   IF ! OuvreBlocNotes( s_cIniFile )
+      RETURN
+   ENDIF
+   IF Boutons( "Enregistrez et fermez le Bloc-notes, puis rechargez les parametres.", ;
+               { "Recharger", "Annuler" }, { "R", "A" }, 1 ) != 1
+      RETURN
+   ENDIF
    IF ChargeConfig( s_cIniFile )
       s_hSession := NIL
       AppliqueConfig()
@@ -244,15 +381,15 @@ STATIC PROCEDURE ModifieParametres()
 
    RETURN
 
-STATIC PROCEDURE OuvreBlocNotes( cFic )
+STATIC FUNCTION OuvreBlocNotes( cFic )
 
    IF hb_FileExists( cFic )
       hb_run( 'start "" notepad.exe "' + cFic + '"' )
-   ELSE
-      Confirme( "Fichier introuvable : " + cFic )
+      RETURN .T.
    ENDIF
+   Attente( "Fichier introuvable : " + cFic, "OK" )
 
-   RETURN
+   RETURN .F.
 
 /* Modifie un parametre pour la session (le fichier .ini n'est pas modifie) */
 STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
@@ -343,11 +480,8 @@ STATIC PROCEDURE BilanSuivi()
          ENDIF
       ENDIF
    ENDIF
-   QOut( "" )
-   QOut( "Appuyez sur une touche pour revenir au menu..." )
-   CLEAR TYPEAHEAD
-   Inkey( 0 )
-   SetColor( "W+/B,N/W,,,W/B" )
+   Attente( "", "Retour au menu" )
+   SetColor( COUL_MENU )
 
    RETURN
 
@@ -1938,9 +2072,18 @@ STATIC FUNCTION DemandeArret()
 
    LOCAL nTouche, cFic := FichierArret()
 
-   DO WHILE ( nTouche := Inkey() ) != 0
+   DO WHILE ( nTouche := Inkey( , INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT ) ) != 0
+      IF nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+         CsLog( "*** Interruption demandee (fermeture de la fenetre) ***" )
+         RETURN .T.
+      ENDIF
       IF nTouche == K_ESC
          CsLog( "*** Interruption demandee (touche Echap) ***" )
+         RETURN .T.
+      ENDIF
+      IF nTouche == K_LBUTTONDOWN .AND. s_lMenu .AND. MRow() == LIG_BOUTONS .AND. MCol() >= 2 .AND. MCol() <= 10
+         CsLog( "*** Interruption demandee (bouton Arreter) ***" )
          RETURN .T.
       ENDIF
    ENDDO
@@ -2096,12 +2239,29 @@ STATIC PROCEDURE OuvreLog()
 
    RETURN
 
+/* Mode menu : le journal defile dans le haut de l'ecran (lignes 0 a LIG_LOG_FIN),
+   le bas reste libre pour le bouton Arreter */
+STATIC PROCEDURE LogEcran( cLigne )
+
+   LOCAL nLarg := MaxCol() + 1
+
+   DO WHILE .T.
+      Scroll( 0, 0, LIG_LOG_FIN, MaxCol(), 1 )
+      @ LIG_LOG_FIN, 0 SAY Left( cLigne, nLarg )
+      cLigne := SubStr( cLigne, nLarg + 1 )
+      IF Empty( cLigne )
+         EXIT
+      ENDIF
+   ENDDO
+
+   RETURN
+
 STATIC PROCEDURE CsLog( cMsg )
 
    LOCAL cLigne := DToC( Date() ) + " " + Time() + "  " + cMsg
 
    IF s_lMenu
-      QOut( cLigne )
+      LogEcran( cLigne )
    ELSE
       OutStd( cLigne + hb_eol() )
    ENDIF
@@ -2163,3 +2323,62 @@ STATIC FUNCTION IniParDefaut()
       "JOURS=30" + CRLF + ;
       "SEULEMENT_NON_TRAITEES=1" + CRLF + ;
       "MARQUER_TRAITEES=0" + CRLF
+
+/* ==========================================================================
+ *  FENETRE WINDOWS (GTWVT) POUR LE MENU
+ *  Vraie fenetre Windows : souris, police et taille reglables, croix de fermeture.
+ *  Les lancements SURVEIL / ALERTES / TEST (taches planifiees) restent en console.
+ *  Si GTWVT n'est pas disponible, le menu reste dans la console.
+ * ========================================================================== */
+STATIC PROCEDURE OuvreFenetre()
+
+   LOCAL pGT := hb_gtCreate( "WVT" )
+
+   IF Empty( pGT )
+      RETURN
+   ENDIF
+   s_pFenetre := pGT
+   hb_gtSelect( pGT )
+   hb_gtInfo( HB_GTI_FONTNAME, "Consolas" )
+   hb_gtInfo( HB_GTI_FONTSIZE, 20 )
+   hb_gtInfo( HB_GTI_FONTWIDTH, 10 )
+   SetMode( 25, 80 )
+   hb_gtInfo( HB_GTI_WINTITLE, "Creditsafe - surveillance des debiteurs" )
+   hb_gtInfo( HB_GTI_RESIZABLE, .T. )      /* agrandir la fenetre agrandit les caracteres */
+   hb_gtInfo( HB_GTI_CLOSEMODE, 1 )        /* la croix envoie HB_K_CLOSE : arret propre */
+   /* double-clic sur l'exe : la console vide ouverte par Windows est fermee */
+   CS_LIBERECONSOLE()
+
+   RETURN
+
+#pragma BEGINDUMP
+
+#include "hbapi.h"
+
+#if defined( HB_OS_WIN )
+   #include <windows.h>
+#endif
+
+/* Ferme la console si elle n'appartient qu'a ce programme (lancement par double-clic).
+   Lance depuis une invite de commandes, la console est partagee : on la laisse. */
+HB_FUNC_STATIC( CS_LIBERECONSOLE )
+{
+#if defined( HB_OS_WIN )
+   /* fonctions chargees dynamiquement : pas de dependance a la version des en-tetes Windows */
+   typedef DWORD ( WINAPI * PGETCONSOLEPROCESSLIST )( LPDWORD, DWORD );
+   typedef HWND ( WINAPI * PGETCONSOLEWINDOW )( void );
+   HMODULE hK32 = GetModuleHandle( TEXT( "kernel32.dll" ) );
+   PGETCONSOLEPROCESSLIST pList = hK32 ? ( PGETCONSOLEPROCESSLIST ) ( void * ) GetProcAddress( hK32, "GetConsoleProcessList" ) : NULL;
+   PGETCONSOLEWINDOW pWnd = hK32 ? ( PGETCONSOLEWINDOW ) ( void * ) GetProcAddress( hK32, "GetConsoleWindow" ) : NULL;
+   DWORD adw[ 4 ];
+
+   if( pList && pWnd && pWnd() != NULL && pList( adw, 4 ) == 1 )
+   {
+      hb_retl( FreeConsole() != 0 );
+      return;
+   }
+#endif
+   hb_retl( HB_FALSE );
+}
+
+#pragma ENDDUMP
