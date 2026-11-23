@@ -401,7 +401,7 @@ STATIC PROCEDURE ModifieParametres()
    IF ChargeConfig( s_cIniFile )
       s_hSession := NIL
       AppliqueConfig()
-      CsLog( "Parametres recharges depuis " + s_cIniFile )
+      CsLog( "Parametres recharges depuis " + s_cIniFile, .F. )
    ENDIF
 
    RETURN
@@ -437,7 +437,7 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
    ENDIF
    s_hSession[ Upper( cSection + "|" + cCle ) ] := cVal
    AppliqueConfig()
-   CsLog( "Parametre modifie pour la session : [" + cSection + "] " + cCle + "=" + cVal )
+   CsLog( "Parametre modifie pour la session : [" + cSection + "] " + cCle + "=" + cVal, .F. )
 
    RETURN
 
@@ -456,7 +456,8 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
 STATIC PROCEDURE ListeAVerifier()
 
    LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T., lFond := .T.
-   LOCAL aBoutons := { "Detail", "Copier le SIREN", "Actualiser", "Retour au menu" }
+   LOCAL aBoutons := { "Detail", "Reporter le SIREN", "Copier le SIREN", "Actualiser", "Retour au menu" }
+   LOCAL nGarde := 0
    LOCAL nNoteMin := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) ) - 15
 
    DO WHILE ! lFin .AND. ! s_lFermer
@@ -464,6 +465,15 @@ STATIC PROCEDURE ListeAVerifier()
          aListe := LitAVerifier( @cMsg )
          nPos := 1
          oB := NavigateurAVerifier( aListe, @nPos, nNoteMin )
+         /* apres un report : on revient a peu pres a la meme place dans la liste */
+         IF oB != NIL .AND. nGarde > 1
+            oB:forceStable()
+            DO WHILE nPos < Min( nGarde, Len( aListe ) ) .AND. ! oB:hitBottom
+               oB:down()
+               oB:forceStable()
+            ENDDO
+         ENDIF
+         nGarde := 0
          lRelire := .F.
          lFond := .T.
       ENDIF
@@ -495,33 +505,51 @@ STATIC PROCEDURE ListeAVerifier()
          lFin := .T.
       CASE nTouche == K_ENTER
          IF oB != NIL
-            DetailAVerifier( aListe[ nPos ] )
+            IF DetailAVerifier( aListe[ nPos ] )
+               nGarde  := nPos
+               lRelire := .T.
+            ENDIF
             lFond := .T.
          ENDIF
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
          IF oB != NIL .AND. LigneSouris( oB, Len( aListe ), @nPos )
             /* clic sur une ligne : on s'y place et on ouvre le detail */
             oB:forceStable()
-            DetailAVerifier( aListe[ nPos ] )
+            IF DetailAVerifier( aListe[ nPos ] )
+               nGarde  := nPos
+               lRelire := .T.
+            ENDIF
             lFond := .T.
          ELSE
             SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
             CASE 1
                IF oB != NIL
-                  DetailAVerifier( aListe[ nPos ] )
+                  IF DetailAVerifier( aListe[ nPos ] )
+                     nGarde  := nPos
+                     lRelire := .T.
+                  ENDIF
                   lFond := .T.
                ENDIF
                EXIT
             CASE 2
                IF oB != NIL
-                  CopieSiren( aListe[ nPos ] )
-                  lFond := .T.          /* le message a efface les boutons */
+                  IF ReporteSiren( aListe[ nPos ] )
+                     nGarde  := nPos
+                     lRelire := .T.
+                  ENDIF
+                  lFond := .T.          /* les messages ont efface les boutons */
                ENDIF
                EXIT
             CASE 3
-               lRelire := .T.
+               IF oB != NIL
+                  CopieSiren( aListe[ nPos ] )
+                  lFond := .T.
+               ENDIF
                EXIT
             CASE 4
+               lRelire := .T.
+               EXIT
+            CASE 5
                lFin := .T.
                EXIT
             ENDSWITCH
@@ -666,7 +694,8 @@ STATIC FUNCTION LitAVerifier( cMsg )
    DO WHILE ! AVERIF->( Eof() )
       IF AllTrim( AVERIF->STATUT ) == "A_VERIFIER"
          h := { => }
-         FOR EACH k IN { "MODE", "DATE_TRT", "CA", "NOM_DEB", "ADR_DEB", "CP_DEB", "VILLE_DEB", "SIREN", ;
+         FOR EACH k IN { "MODE", "DATE_TRT", "SERIE", "SIREN_ORI", "DEB_RECNO", "CODERELA", ;
+                         "CA", "NOM_DEB", "ADR_DEB", "CP_DEB", "VILLE_DEB", "SIREN", ;
                          "CS_NOM", "CS_ADRESSE", "CS_CP", "CS_VILLE", "CS_STATUT", "CS_TYPE", "CS_ID", ;
                          "SCORE", "NB_RESULT", "PORTF_NOM", "MESSAGE" }
             h[ k ] := ChampSuivi( k )
@@ -701,10 +730,10 @@ STATIC FUNCTION ChampSuivi( cChamp )
    RETURN iif( HB_ISSTRING( x ), AllTrim( x ), x )
 
 /* Detail d'un debiteur a verifier */
-STATIC PROCEDURE DetailAVerifier( h )
+STATIC FUNCTION DetailAVerifier( h )
 
-   LOCAL aBoutons := { "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
-   LOCAL cMsg := h[ "MESSAGE" ], nP
+   LOCAL aBoutons := { "Reporter le SIREN", "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
+   LOCAL cMsg := h[ "MESSAGE" ], nP, lReporte := .F.
 
    DO WHILE ! lFin .AND. ! s_lFermer
       SetColor( COUL_FOND )
@@ -744,7 +773,7 @@ STATIC PROCEDURE DetailAVerifier( h )
             @ 17, 3 SAY SubStr( cMsg, 76, 75 )
          ENDIF
 
-         @ 20, 2 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs."
+         @ 20, 2 SAY "Si la societe est la bonne : bouton Reporter le SIREN (fichier des debiteurs)."
          @ 21, 2 SAY "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
       ENDIF
       aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
@@ -758,16 +787,22 @@ STATIC PROCEDURE DetailAVerifier( h )
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
          SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
          CASE 1
-            CopieSiren( h )
+            IF ReporteSiren( h )
+               lReporte := .T.
+               lFin := .T.             /* retour a la liste, qui sera relue */
+            ENDIF
             EXIT
          CASE 2
+            CopieSiren( h )
+            EXIT
+         CASE 3
             lFin := .T.
             EXIT
          ENDSWITCH
       ENDCASE
    ENDDO
 
-   RETURN
+   RETURN lReporte
 
 /* Detail en 132 colonnes : debiteur et societe proposee cote a cote */
 STATIC PROCEDURE DetailLarge( h, cMsg )
@@ -803,8 +838,130 @@ STATIC PROCEDURE DetailLarge( h, cMsg )
       @ 12, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
    ENDIF
 
-   @ 16, 2 SAY "Si la societe est la bonne : reporter le SIREN dans le fichier des debiteurs. " + ;
+   @ 16, 2 SAY "Si la societe est la bonne : bouton Reporter le SIREN (il est ecrit dans le fichier des debiteurs). " + ;
                "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
+
+   RETURN
+
+/* Reporte le SIREN propose dans le fichier des debiteurs (DebSiren.dbf), apres confirmation.
+   - fiche retrouvee par DEB_RECNO (CA verifie), sinon par le CA ;
+   - jamais d'ecrasement d'un SIREN deja renseigne ;
+   - fiche verrouillee le temps de l'ecriture ;
+   - trace : ligne REPORTE dans le suivi (le debiteur sort de la liste) et ligne dans le journal.
+   Renvoie .T. si le SIREN a ete ecrit. */
+STATIC FUNCTION ReporteSiren( h )
+
+   LOCAL cFic   := CheminFichier( Cfg( "GENERAL", "FICHIER_DEBITEURS", "DebSiren.dbf" ) )
+   LOCAL cChS   := Cfg( "CHAMPS", "SIREN", "SIREN" ), cChCA := Cfg( "CHAMPS", "CA", "CA" )
+   LOCAL cSiren := h[ "SIREN" ], nRec := iif( HB_ISNUMERIC( h[ "DEB_RECNO" ] ), h[ "DEB_RECNO" ], 0 )
+   LOCAL lOuvert := .F., lOk := .F., nPosS, nPosCA, lTrouve := .F., xVal, cErreur := "", nAutre := 0
+
+   IF Len( cSiren ) != 9
+      Attente( "Pas de SIREN valide pour cette proposition.", "OK" )
+      RETURN .F.
+   ENDIF
+   IF Empty( h[ "CA" ] )
+      Attente( "Debiteur sans CA dans le suivi : impossible de retrouver sa fiche.", "OK" )
+      RETURN .F.
+   ENDIF
+   IF ! Confirme( "Ecrire le SIREN " + cSiren + " (" + Left( h[ "CS_NOM" ], 30 ) + ") dans la fiche du debiteur " + ;
+                  h[ "CA" ] + " " + Left( h[ "NOM_DEB" ], 30 ) + " ?" )
+      RETURN .F.
+   ENDIF
+
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      /* ouverture partagee, en ecriture : l'index de production est mis a jour */
+      dbUseArea( .T., "SIXCDX", cFic, "DEBMAJ", .T., .F., CdpDbf() )
+      lOuvert := .T.
+   RECOVER
+      cErreur := "Impossible d'ouvrir " + cFic + " en ecriture."
+   END SEQUENCE
+
+   IF lOuvert
+      nPosS  := DEBMAJ->( FieldPos( cChS ) )
+      nPosCA := DEBMAJ->( FieldPos( cChCA ) )
+      DEBMAJ->( ordSetFocus( 0 ) )
+      IF nPosS == 0 .OR. nPosCA == 0
+         cErreur := "Champ " + iif( nPosS == 0, cChS, cChCA ) + " absent de " + cFic + " (voir [CHAMPS])."
+      ELSE
+         /* 1) la fiche notee lors du traitement, si son CA correspond */
+         IF nRec > 0 .AND. nRec <= DEBMAJ->( LastRec() )
+            DEBMAJ->( dbGoto( nRec ) )
+            lTrouve := ! DEBMAJ->( Deleted() ) .AND. AllTrim( ToS( DEBMAJ->( FieldGet( nPosCA ) ) ) ) == h[ "CA" ]
+         ENDIF
+         /* 2) sinon recherche par le CA : premiere fiche de ce CA sans SIREN */
+         IF ! lTrouve
+            DEBMAJ->( dbGoTop() )
+            DO WHILE ! DEBMAJ->( Eof() )
+               IF AllTrim( ToS( DEBMAJ->( FieldGet( nPosCA ) ) ) ) == h[ "CA" ]
+                  IF Empty( DEBMAJ->( FieldGet( nPosS ) ) )
+                     lTrouve := .T.
+                     EXIT
+                  ENDIF
+                  nAutre := DEBMAJ->( RecNo() )
+               ENDIF
+               DEBMAJ->( dbSkip() )
+            ENDDO
+            IF ! lTrouve .AND. nAutre > 0
+               /* ce CA existe mais a deja un SIREN */
+               DEBMAJ->( dbGoto( nAutre ) )
+               lTrouve := .T.
+            ENDIF
+         ENDIF
+         xVal := iif( lTrouve, DEBMAJ->( FieldGet( nPosS ) ), NIL )
+         DO CASE
+         CASE ! lTrouve
+            cErreur := "Fiche du debiteur " + h[ "CA" ] + " introuvable dans " + cFic + "."
+         CASE ! Empty( xVal )
+            cErreur := "Le debiteur " + h[ "CA" ] + " a deja un SIREN (" + AllTrim( ToS( xVal ) ) + ") : rien n'est modifie."
+         CASE ! DEBMAJ->( RLock() )
+            cErreur := "Fiche du debiteur " + h[ "CA" ] + " utilisee par un autre programme : reessayez plus tard."
+         OTHERWISE
+            DEBMAJ->( FieldPut( nPosS, iif( HB_ISNUMERIC( xVal ), Val( cSiren ), cSiren ) ) )
+            DEBMAJ->( dbCommit() )
+            DEBMAJ->( dbUnlock() )
+            lOk := .T.
+         ENDCASE
+      ENDIF
+      DEBMAJ->( dbCloseArea() )
+   ENDIF
+
+   IF ! lOk
+      Attente( cErreur, "OK" )
+      RETURN .F.
+   ENDIF
+
+   CsLog( "SIREN " + cSiren + " (" + h[ "CS_NOM" ] + ") reporte dans " + cFic + " pour le debiteur " + ;
+          h[ "CA" ] + " " + h[ "NOM_DEB" ], .F. )
+   NoteReport( h )
+   Attente( "SIREN " + cSiren + " reporte pour le debiteur " + h[ "CA" ] + ". Il sera mis en surveillance au prochain passage.", "OK" )
+
+   RETURN .T.
+
+/* Ligne REPORTE dans le suivi, avec la meme cle et le meme mode que la ligne A_VERIFIER */
+STATIC PROCEDURE NoteReport( h )
+
+   LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_SUIVI", "CsSuivi.dbf" ) ), k, nPos
+
+   IF ! OuvreSuivi( cFic )
+      RETURN
+   ENDIF
+   SUIVI->( dbAppend() )
+   SUIVI->DATE_TRT := Date()
+   SUIVI->HEURE    := Time()
+   FOR EACH k IN { "MODE", "SERIE", "SIREN_ORI", "DEB_RECNO", "CA", "CODERELA", "NOM_DEB", "ADR_DEB", "CP_DEB", "VILLE_DEB", ;
+                   "SIREN", "CS_ID", "CS_NOM", "CS_ADRESSE", "CS_CP", "CS_VILLE", "CS_STATUT", "CS_TYPE", "SCORE", "PORTF_NOM" }
+      nPos := SUIVI->( FieldPos( k ) )
+      IF nPos > 0 .AND. hb_HHasKey( h, k ) .AND. ValType( h[ k ] ) == ValType( SUIVI->( FieldGet( nPos ) ) )
+         SUIVI->( FieldPut( nPos, h[ k ] ) )
+      ENDIF
+   NEXT
+   SUIVI->METHODE := "NOM"
+   SUIVI->STATUT  := "REPORTE"
+   SUIVI->MESSAGE := "SIREN reporte dans le fichier des debiteurs le " + DToC( Date() ) + " a " + Left( Time(), 5 )
+   SUIVI->( dbCommit() )
+   SUIVI->( dbUnlock() )
+   SUIVI->( dbCloseArea() )
 
    RETURN
 
@@ -2663,11 +2820,15 @@ STATIC PROCEDURE LogEcran( cLigne )
 
    RETURN
 
-STATIC PROCEDURE CsLog( cMsg )
+/* lEcran = .F. : journal seulement (action du menu dont l'ecran ne doit pas defiler) */
+STATIC PROCEDURE CsLog( cMsg, lEcran )
 
    LOCAL cLigne := DToC( Date() ) + " " + Time() + "  " + cMsg
 
-   IF s_lMenu
+   hb_default( @lEcran, .T. )
+   IF ! lEcran
+      /* rien a l'ecran */
+   ELSEIF s_lMenu
       LogEcran( cLigne )
    ELSE
       OutStd( cLigne + hb_eol() )
