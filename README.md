@@ -25,7 +25,7 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
 | 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
 | 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
-| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **Reporter le SIREN** (voir plus bas) et **Copier le SIREN** |
+| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN** |
 | 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
 | 7 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
 | 8 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
@@ -165,7 +165,12 @@ en `A_VERIFIER`.
 * la fiche est verrouillée le temps de l'écriture (si un autre programme l'utilise, rien n'est écrit) ;
 * une ligne `REPORTE` est ajoutée au suivi : le débiteur sort de la liste. L'action est aussi notée dans le journal.
 
-On peut aussi reporter le SIREN à la main dans `DebSiren.dbf`. Au passage suivant,
+On peut aussi reporter le SIREN à la main dans `DebSiren.dbf`.
+
+**Rejeter une proposition** (mauvaise société) : bouton **Rejeter**, dans la liste ou dans le détail. Après confirmation,
+rien n'est écrit dans `DebSiren.dbf` ; une ligne `REJETE` (société et SIREN rejetés, date) est ajoutée au suivi et au
+journal. Le débiteur sort de la liste et n'est plus recherché par son nom aux passages suivants (pour ne pas reproposer
+la même société), sauf si son nom ou son adresse change dans `DebSiren.dbf`, ou si on lui saisit un SIREN. Au passage suivant,
 le débiteur est traité comme un débiteur avec SIREN. En mode REEL, les `A_VERIFIER` et `INTROUVABLE` trouvés par nom
 ne sont pas relancés à chaque passage (pour ne pas consommer de recherches). Ils le sont si le nom ou l'adresse du
 débiteur change, ou si la ligne est supprimée de `CsSuivi.dbf`.
