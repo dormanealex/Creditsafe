@@ -456,7 +456,7 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
 STATIC PROCEDURE ListeAVerifier()
 
    LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T., lFond := .T.
-   LOCAL aBoutons := { "Detail", "Reporter le SIREN", "Copier le SIREN", "Actualiser", "Retour au menu" }
+   LOCAL aBoutons := { "Detail", "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Actualiser", "Retour au menu" }
    LOCAL nGarde := 0
    LOCAL nNoteMin := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) ) - 15
 
@@ -542,14 +542,23 @@ STATIC PROCEDURE ListeAVerifier()
                EXIT
             CASE 3
                IF oB != NIL
-                  CopieSiren( aListe[ nPos ] )
+                  IF RejetteProposition( aListe[ nPos ] )
+                     nGarde  := nPos
+                     lRelire := .T.
+                  ENDIF
                   lFond := .T.
                ENDIF
                EXIT
             CASE 4
-               lRelire := .T.
+               IF oB != NIL
+                  CopieSiren( aListe[ nPos ] )
+                  lFond := .T.
+               ENDIF
                EXIT
             CASE 5
+               lRelire := .T.
+               EXIT
+            CASE 6
                lFin := .T.
                EXIT
             ENDSWITCH
@@ -729,10 +738,11 @@ STATIC FUNCTION ChampSuivi( cChamp )
 
    RETURN iif( HB_ISSTRING( x ), AllTrim( x ), x )
 
-/* Detail d'un debiteur a verifier */
+/* Detail d'un debiteur a verifier. Renvoie .T. si la proposition a ete traitee
+   (SIREN reporte ou proposition rejetee) : la liste doit etre relue. */
 STATIC FUNCTION DetailAVerifier( h )
 
-   LOCAL aBoutons := { "Reporter le SIREN", "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
+   LOCAL aBoutons := { "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
    LOCAL cMsg := h[ "MESSAGE" ], nP, lReporte := .F.
 
    DO WHILE ! lFin .AND. ! s_lFermer
@@ -773,7 +783,7 @@ STATIC FUNCTION DetailAVerifier( h )
             @ 17, 3 SAY SubStr( cMsg, 76, 75 )
          ENDIF
 
-         @ 20, 2 SAY "Si la societe est la bonne : bouton Reporter le SIREN (fichier des debiteurs)."
+         @ 20, 2 SAY "Bonne societe : Reporter le SIREN.  Mauvaise societe : Rejeter."
          @ 21, 2 SAY "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
       ENDIF
       aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
@@ -793,9 +803,15 @@ STATIC FUNCTION DetailAVerifier( h )
             ENDIF
             EXIT
          CASE 2
-            CopieSiren( h )
+            IF RejetteProposition( h )
+               lReporte := .T.
+               lFin := .T.
+            ENDIF
             EXIT
          CASE 3
+            CopieSiren( h )
+            EXIT
+         CASE 4
             lFin := .T.
             EXIT
          ENDSWITCH
@@ -838,7 +854,7 @@ STATIC PROCEDURE DetailLarge( h, cMsg )
       @ 12, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
    ENDIF
 
-   @ 16, 2 SAY "Si la societe est la bonne : bouton Reporter le SIREN (il est ecrit dans le fichier des debiteurs). " + ;
+   @ 16, 2 SAY "Bonne societe : Reporter le SIREN (ecrit dans le fichier des debiteurs).  Mauvaise societe : Rejeter. " + ;
                "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
 
    RETURN
@@ -933,18 +949,37 @@ STATIC FUNCTION ReporteSiren( h )
 
    CsLog( "SIREN " + cSiren + " (" + h[ "CS_NOM" ] + ") reporte dans " + cFic + " pour le debiteur " + ;
           h[ "CA" ] + " " + h[ "NOM_DEB" ], .F. )
-   NoteReport( h )
+   NoteSuiviAV( h, "REPORTE", "SIREN reporte dans le fichier des debiteurs le " + DToC( Date() ) + " a " + Left( Time(), 5 ) )
    Attente( "SIREN " + cSiren + " reporte pour le debiteur " + h[ "CA" ] + ". Il sera mis en surveillance au prochain passage.", "OK" )
 
    RETURN .T.
 
-/* Ligne REPORTE dans le suivi, avec la meme cle et le meme mode que la ligne A_VERIFIER */
-STATIC PROCEDURE NoteReport( h )
+/* Rejette la proposition (mauvaise societe), apres confirmation : rien n'est ecrit dans les debiteurs,
+   ligne REJETE dans le suivi (le debiteur sort de la liste et n'est plus recherche par son nom,
+   tant que son nom ou son adresse ne change pas) et trace dans le journal. Renvoie .T. si rejetee. */
+STATIC FUNCTION RejetteProposition( h )
+
+   IF ! Confirme( "Rejeter la proposition " + Left( h[ "CS_NOM" ], 30 ) + " (" + h[ "SIREN" ] + ") pour le debiteur " + ;
+                  h[ "CA" ] + " " + Left( h[ "NOM_DEB" ], 30 ) + " ?" )
+      RETURN .F.
+   ENDIF
+   IF ! NoteSuiviAV( h, "REJETE", "Proposition rejetee le " + DToC( Date() ) + " a " + Left( Time(), 5 ) + " : " + ;
+                                  h[ "CS_NOM" ] + " (" + h[ "SIREN" ] + ")" )
+      Attente( "Impossible d'ecrire dans le fichier de suivi : rien n'est modifie.", "OK" )
+      RETURN .F.
+   ENDIF
+   CsLog( "Proposition " + h[ "CS_NOM" ] + " (" + h[ "SIREN" ] + ") rejetee pour le debiteur " + ;
+          h[ "CA" ] + " " + h[ "NOM_DEB" ], .F. )
+
+   RETURN .T.
+
+/* Ligne de suivi (REPORTE, REJETE) avec la meme cle et le meme mode que la ligne A_VERIFIER */
+STATIC FUNCTION NoteSuiviAV( h, cStatut, cMessage )
 
    LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_SUIVI", "CsSuivi.dbf" ) ), k, nPos
 
    IF ! OuvreSuivi( cFic )
-      RETURN
+      RETURN .F.
    ENDIF
    SUIVI->( dbAppend() )
    SUIVI->DATE_TRT := Date()
@@ -957,13 +992,13 @@ STATIC PROCEDURE NoteReport( h )
       ENDIF
    NEXT
    SUIVI->METHODE := "NOM"
-   SUIVI->STATUT  := "REPORTE"
-   SUIVI->MESSAGE := "SIREN reporte dans le fichier des debiteurs le " + DToC( Date() ) + " a " + Left( Time(), 5 )
+   SUIVI->STATUT  := cStatut
+   SUIVI->MESSAGE := cMessage
    SUIVI->( dbCommit() )
    SUIVI->( dbUnlock() )
    SUIVI->( dbCloseArea() )
 
-   RETURN
+   RETURN .T.
 
 /* Copie le SIREN propose dans le presse-papiers */
 STATIC PROCEDURE CopieSiren( h )
@@ -2507,7 +2542,7 @@ STATIC FUNCTION CdpDbf()
 STATIC FUNCTION DejaTraite( cSerie, cSirenOri, lNom )
 
    LOCAL cCle := PadR( cSerie, 2 ) + PadR( cSirenOri, 20 ), lDeja := .F.
-   LOCAL aFinis := iif( lNom, { "AJOUTE", "DEJA", "INVALIDE", "INTROUVABLE", "A_VERIFIER" }, { "AJOUTE", "DEJA", "INVALIDE" } )
+   LOCAL aFinis := iif( lNom, { "AJOUTE", "DEJA", "INVALIDE", "INTROUVABLE", "A_VERIFIER", "REJETE" }, { "AJOUTE", "DEJA", "INVALIDE" } )
 
    SUIVI->( ordSetFocus( "CLE" ) )
    SUIVI->( dbSeek( cCle ) )
