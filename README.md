@@ -25,7 +25,7 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
 | 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
 | 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
-| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée, et bouton **Copier le SIREN** |
+| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **Reporter le SIREN** (voir plus bas) et **Copier le SIREN** |
 | 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
 | 7 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
 | 8 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
@@ -157,7 +157,15 @@ Pour le nom, `NOM=RS|NOM` prend le premier champ non vide : la raison sociale, s
 Sans code postal, la note ne peut pas atteindre 80 : un débiteur identifié par sa seule ville part donc toujours
 en `A_VERIFIER`.
 
-**Traiter un `A_VERIFIER`** : contrôler la proposition (menu, choix 5), puis reporter le SIREN dans `DebSiren.dbf`. Au passage suivant,
+**Traiter un `A_VERIFIER`** : contrôler la proposition (menu, choix 5), puis cliquer sur **Reporter le SIREN**
+(dans la liste ou dans le détail). Après confirmation, le SIREN proposé est écrit dans `DebSiren.dbf` :
+
+* la fiche est celle notée lors du traitement (`DEB_RECNO`) si son CA correspond, sinon la première fiche de ce CA sans SIREN ;
+* un SIREN déjà renseigné n'est jamais écrasé ;
+* la fiche est verrouillée le temps de l'écriture (si un autre programme l'utilise, rien n'est écrit) ;
+* une ligne `REPORTE` est ajoutée au suivi : le débiteur sort de la liste. L'action est aussi notée dans le journal.
+
+On peut aussi reporter le SIREN à la main dans `DebSiren.dbf`. Au passage suivant,
 le débiteur est traité comme un débiteur avec SIREN. En mode REEL, les `A_VERIFIER` et `INTROUVABLE` trouvés par nom
 ne sont pas relancés à chaque passage (pour ne pas consommer de recherches). Ils le sont si le nom ou l'adresse du
 débiteur change, ou si la ligne est supprimée de `CsSuivi.dbf`.
