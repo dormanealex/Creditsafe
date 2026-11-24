@@ -116,6 +116,11 @@ TAG_CA=CA
 * Les **portefeuilles** Creditsafe restent regroupés par les **2** premières lettres du CA.
 * Le suivi, la liste des débiteurs à vérifier et le bilan portent toujours sur tout le suivi.
 * Dans le menu, le choix **7. Séries à traiter** modifie les séries pour la session.
+* **Dernières séries traitées** : à chaque mise en surveillance lancée depuis le menu, les séries sont enregistrées
+  dans `creditsafe.etat` (à côté du `.ini`, non versionné). Le menu les reprend à l'ouverture suivante
+  (« [derniere serie traitee le …] » dans l'en-tête). Les séries passées en argument restent prioritaires.
+  Les lancements en ligne de commande (tâches planifiées) n'utilisent pas ce fichier et ne le modifient pas :
+  sans argument, ils prennent les séries du `.ini`.
 
 ## Fonctionnement de `SURVEIL`
 

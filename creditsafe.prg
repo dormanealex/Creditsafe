@@ -49,6 +49,8 @@ STATIC s_lMenu     := .F.
 STATIC s_hSession  := NIL      /* parametres modifies depuis le menu, pour la session seulement */
 STATIC s_pFenetre  := NIL      /* fenetre GTWVT du menu */
 STATIC s_lFermer   := .F.      /* clic sur la croix de la fenetre */
+STATIC s_lSeriesArg := .F.     /* series donnees sur la ligne de commande (prioritaires) */
+STATIC s_cMarqueSeries := ""   /* origine des series affichee dans le menu (derniere serie traitee) */
 
 /* -------------------------------------------------------------------------- */
 
@@ -95,6 +97,7 @@ PROCEDURE Main( cMode, cArg2, cArg3 )
          RETURN
       ENDIF
       CfgSession( "SELECTION", "SERIES", ChaineSeries( ListeSeries( cSeries ) ) )
+      s_lSeriesArg := .T.
    ENDIF
 
    IF cMode == "MENU"
@@ -165,6 +168,10 @@ STATIC PROCEDURE MenuPrincipal()
    OuvreFenetre()
    Set( _SET_EVENTMASK, HB_INKEY_ALL )
    SetColor( COUL_MENU )
+   /* series de la derniere mise en surveillance lancee depuis le menu (sauf series en argument) */
+   IF ! s_lSeriesArg
+      RepriseEtat()
+   ENDIF
    DO WHILE ! lFin .AND. ! s_lFermer
       CLS
       EnteteMenu()
@@ -377,8 +384,63 @@ STATIC PROCEDURE EnteteMenu()
 
 /* "(session)" si le parametre a ete modifie depuis le menu */
 STATIC FUNCTION MarqueSession( cSection, cCle )
+
+   IF Upper( cSection + "|" + cCle ) == "SELECTION|SERIES" .AND. ! Empty( s_cMarqueSeries )
+      RETURN "  [" + s_cMarqueSeries + "]"
+   ENDIF
+
    RETURN iif( HB_ISHASH( s_hSession ) .AND. hb_HHasKey( s_hSession, Upper( cSection + "|" + cCle ) ), ;
                "  [modifie pour cette session]", "" )
+
+/* ==========================================================================
+ *  DERNIERES SERIES TRAITEES (fichier <parametres>.etat, a cote du .ini)
+ *  Enregistrees a chaque mise en surveillance lancee depuis le menu, reprises a
+ *  l'ouverture suivante du menu. Les lancements en ligne de commande (taches planifiees)
+ *  n'en tiennent pas compte et ne les modifient pas.
+ * ========================================================================== */
+STATIC FUNCTION FichierEtat()
+   RETURN hb_FNameExtSet( s_cIniFile, ".etat" )
+
+STATIC PROCEDURE SauveEtat( cSeries )
+
+   LOCAL cDate := DToC( Date() ) + " " + Left( Time(), 5 )
+
+   IF hb_MemoWrit( FichierEtat(), ;
+         "; Dernieres series traitees depuis le menu (fichier genere par creditsafe, inutile de le modifier)" + CRLF + ;
+         "[MENU]" + CRLF + ;
+         "SERIES=" + cSeries + CRLF + ;
+         "DATE=" + cDate + CRLF )
+      s_cMarqueSeries := "derniere serie traitee le " + cDate
+   ELSE
+      CsLog( "ATTENTION : impossible d'enregistrer les series dans " + FichierEtat(), .F. )
+   ENDIF
+
+   RETURN
+
+STATIC PROCEDURE RepriseEtat()
+
+   LOCAL hEtat, hSec, cSeries, cDate, lValides := .T.
+
+   IF ! hb_FileExists( FichierEtat() )
+      RETURN
+   ENDIF
+   hEtat := hb_iniRead( FichierEtat(), .F. )
+   hSec  := iif( HB_ISHASH( hEtat ), HGetCI( hEtat, "MENU" ), NIL )
+   IF ! HB_ISHASH( hSec )
+      RETURN
+   ENDIF
+   cSeries := HGetCI( hSec, "SERIES" )
+   cDate   := HGetCI( hSec, "DATE" )
+   IF ! HB_ISSTRING( cSeries )
+      RETURN
+   ENDIF
+   ListeSeries( cSeries, @lValides )
+   IF lValides
+      CfgSession( "SELECTION", "SERIES", ChaineSeries( ListeSeries( cSeries ) ) )
+      s_cMarqueSeries := "derniere serie traitee" + iif( HB_ISSTRING( cDate ) .AND. ! Empty( cDate ), " le " + AllTrim( cDate ), "" )
+   ENDIF
+
+   RETURN
 
 /* Lance une fonction depuis le menu : le journal defile en haut, bouton Arreter en bas */
 STATIC PROCEDURE LanceFonction( cMode )
@@ -388,6 +450,10 @@ STATIC PROCEDURE LanceFonction( cMode )
    @ LIG_BOUTONS, 2 SAY " Arreter " COLOR COUL_BOUTON
    @ LIG_BOUTONS, 13 SAY "(ou touche Echap) : arret propre apres le debiteur en cours"
    Execute( cMode )
+   IF cMode == "SURVEIL"
+      /* series retenues pour les prochaines sessions du menu */
+      SauveEtat( ChaineSeries( ListeSeries( Cfg( "SELECTION", "SERIES", "" ) ) ) )
+   ENDIF
    IF ! s_lFermer
       Attente( "Termine.", "Retour au menu" )
    ENDIF
@@ -410,6 +476,7 @@ STATIC PROCEDURE SaisieSeries()
    READ
    IF LastKey() != K_ESC
       CfgSession( "SELECTION", "SERIES", ChaineSeries( ListeSeries( cSer ) ) )
+      s_cMarqueSeries := ""
    ENDIF
 
    RETURN
@@ -463,8 +530,12 @@ STATIC PROCEDURE ModifieParametres()
    ENDIF
    IF ChargeConfig( s_cIniFile )
       s_hSession := NIL
+      s_cMarqueSeries := ""
       AppliqueConfig()
       CsLog( "Parametres recharges depuis " + s_cIniFile, .F. )
+      IF ! s_lSeriesArg
+         RepriseEtat()
+      ENDIF
    ENDIF
 
    RETURN
