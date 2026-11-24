@@ -4,12 +4,16 @@
  * (API Connect v1 - Global Monitoring) et recuperation des alertes.
  *
  * Utilisation :
- *    creditsafe                          -> menu (toutes les fonctions)
- *    creditsafe MENU     [fichier.ini]   -> menu, avec un autre fichier de parametres
- *    creditsafe SURVEIL  [fichier.ini]   -> met les debiteurs en surveillance
- *                                           (par SIREN, ou par nom + adresse si pas de SIREN)
- *    creditsafe ALERTES  [fichier.ini]   -> recupere les alertes (notification events)
- *    creditsafe TEST     [fichier.ini]   -> teste l'authentification et liste les portefeuilles
+ *    creditsafe                                   -> menu (toutes les fonctions)
+ *    creditsafe MENU     [series] [fichier.ini]   -> menu
+ *    creditsafe SURVEIL  [series] [fichier.ini]   -> met les debiteurs en surveillance
+ *                                                    (par SIREN, ou par nom + adresse si pas de SIREN)
+ *    creditsafe ALERTES  [fichier.ini]            -> recupere les alertes (notification events)
+ *    creditsafe TEST     [fichier.ini]            -> teste l'authentification et liste les portefeuilles
+ *
+ *    [series] : series de debiteurs a traiter = 3 premiers caracteres du CA, separees par des virgules
+ *               (ex. ABC,DEF ; TOUT = tout le fichier). Remplace [SELECTION] SERIES du fichier .ini.
+ *               Ancienne forme acceptee : creditsafe SURVEIL fichier.ini
  *
  * Par defaut le fichier de parametres est creditsafe.ini (a cote de l'executable).
  *
@@ -48,12 +52,24 @@ STATIC s_lFermer   := .F.      /* clic sur la croix de la fenetre */
 
 /* -------------------------------------------------------------------------- */
 
-PROCEDURE Main( cMode, cIni )
+PROCEDURE Main( cMode, cArg2, cArg3 )
+
+   LOCAL cIni, cSeries := NIL, lValides := .T.
 
    /* sans argument : menu. Les taches planifiees doivent indiquer le mode (SURVEIL, ALERTES) */
    hb_default( @cMode, "MENU" )
-   hb_default( @cIni, hb_FNameExtSet( hb_ProgName(), ".ini" ) )
    cMode := Upper( AllTrim( cMode ) )
+   /* 2e argument : series (ABC,DEF ou TOUT), puis fichier .ini ; ancienne forme : fichier .ini en 2e */
+   IF EstListeSeries( cArg2 )
+      cSeries := cArg2
+      cIni    := cArg3
+   ELSE
+      cIni := cArg2
+      IF EstListeSeries( cArg3 )
+         cSeries := cArg3
+      ENDIF
+   ENDIF
+   hb_default( @cIni, hb_FNameExtSet( hb_ProgName(), ".ini" ) )
 
    SET DATE FRENCH
    SET CENTURY ON
@@ -67,6 +83,19 @@ PROCEDURE Main( cMode, cIni )
    ENDIF
    AppliqueConfig()
    OuvreLog()
+   IF cSeries != NIL
+      /* series de la ligne de commande : remplacent celles du .ini pour cette execution */
+      ListeSeries( cSeries, @lValides )
+      IF ! lValides
+         CsLog( "ERREUR : series invalides sur la ligne de commande : " + cSeries + ;
+                " (3 lettres ou chiffres par serie, separees par des virgules, ou TOUT)" )
+         IF s_nLog != -1
+            FClose( s_nLog )
+         ENDIF
+         RETURN
+      ENDIF
+      CfgSession( "SELECTION", "SERIES", ChaineSeries( ListeSeries( cSeries ) ) )
+   ENDIF
 
    IF cMode == "MENU"
       s_lMenu := .T.
@@ -145,15 +174,16 @@ STATIC PROCEDURE MenuPrincipal()
                   "4. Bilan du fichier de suivi", ;
                   "5. Debiteurs a verifier (A_VERIFIER)", ;
                   "6. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
-                  "7. Nombre maximum de debiteurs a traiter", ;
-                  "8. Modifier les parametres (Bloc-notes)", ;
-                  "9. Consulter le journal (Bloc-notes)", ;
+                  "7. Series a traiter", ;
+                  "8. Nombre maximum de debiteurs a traiter", ;
+                  "9. Modifier les parametres (Bloc-notes)", ;
+                  "J. Consulter le journal (Bloc-notes)", ;
                   "0. Quitter" }
-      @ 22, Int( ( MaxCol() - 51 ) / 2 ) SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
-      nChoix := ChoixMenu( aItems, 10, Int( ( MaxCol() - 51 ) / 2 ), 52, nChoix )
+      @ 23, Int( ( MaxCol() - 51 ) / 2 ) SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
+      nChoix := ChoixMenu( aItems, 11, Int( ( MaxCol() - 51 ) / 2 ), 52, nChoix )
 
       DO CASE
-      CASE nChoix == 0 .OR. nChoix == 10 .OR. s_lFermer
+      CASE nChoix == 0 .OR. nChoix == 11 .OR. s_lFermer
          lFin := .T.
          nChoix := 1
       CASE nChoix == 1
@@ -178,10 +208,12 @@ STATIC PROCEDURE MenuPrincipal()
             CfgSession( "GENERAL", "SIMULATION", "1" )
          ENDIF
       CASE nChoix == 7
-         SaisieMaxDebiteurs()
+         SaisieSeries()
       CASE nChoix == 8
-         ModifieParametres()
+         SaisieMaxDebiteurs()
       CASE nChoix == 9
+         ModifieParametres()
+      CASE nChoix == 10
          OuvreBlocNotes( CheminFichier( Cfg( "GENERAL", "FICHIER_LOG", "creditsafe.log" ) ) )
       ENDCASE
    ENDDO
@@ -336,7 +368,10 @@ STATIC PROCEDURE EnteteMenu()
    @ 6, 2 SAY "Mode          : " + iif( s_lSimul, "SIMULATION (rien n'est cree chez Creditsafe)", "REEL (les societes sont ajoutees)" ) + ;
               MarqueSession( "GENERAL", "SIMULATION" )
    @ 7, 2 SAY "Max debiteurs : " + iif( nMax > 0, hb_ntos( nMax ), "sans limite" ) + MarqueSession( "GENERAL", "MAX_DEBITEURS" )
-   @ 8, 2 SAY Replicate( "-", MaxCol() - 3 )
+   @ 8, 2 SAY "Series        : " + iif( Empty( ListeSeries( Cfg( "SELECTION", "SERIES", "" ) ) ), "toutes (tout le fichier)", ;
+                                        ChaineSeries( ListeSeries( Cfg( "SELECTION", "SERIES", "" ) ) ) ) + ;
+              MarqueSession( "SELECTION", "SERIES" )
+   @ 9, 2 SAY Replicate( "-", MaxCol() - 3 )
 
    RETURN
 
@@ -362,6 +397,34 @@ STATIC PROCEDURE LanceFonction( cMode )
 
 STATIC FUNCTION Confirme( cMsg )
    RETURN Boutons( cMsg, { "Oui", "Non" }, { "O", "N" }, 2 ) == 1
+
+/* Series a traiter pour la session (le fichier .ini n'est pas modifie) */
+STATIC PROCEDURE SaisieSeries()
+
+   LOCAL cSer := PadR( ChaineSeries( ListeSeries( Cfg( "SELECTION", "SERIES", "" ) ) ), 60 )
+   LOCAL GetList := {}
+
+   @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS + 1, MaxCol()
+   @ LIG_BOUTONS, 2 SAY "Series a traiter : 3 caracteres du CA, separees par des virgules (ex. ABC,DEF). Vide = tout le fichier."
+   @ LIG_BOUTONS + 1, 2 SAY "Series :" GET cSer PICTURE "@!" VALID SeriesSaisieOK( cSer )
+   READ
+   IF LastKey() != K_ESC
+      CfgSession( "SELECTION", "SERIES", ChaineSeries( ListeSeries( cSer ) ) )
+   ENDIF
+
+   RETURN
+
+STATIC FUNCTION SeriesSaisieOK( cSer )
+
+   LOCAL lValides := .T.
+
+   ListeSeries( cSer, @lValides )
+   IF ! lValides
+      @ LIG_BOUTONS, 0 CLEAR TO LIG_BOUTONS, MaxCol()
+      @ LIG_BOUTONS, 2 SAY "Series invalides : 3 lettres ou chiffres par serie, separees par des virgules (ex. ABC,DEF)." COLOR "GR+/B"
+   ENDIF
+
+   RETURN lValides
 
 /* Nombre maximum de debiteurs : boutons pour les valeurs courantes, saisie pour une autre valeur */
 STATIC PROCEDURE SaisieMaxDebiteurs()
@@ -870,7 +933,7 @@ STATIC FUNCTION ReporteSiren( h )
    LOCAL cFic   := CheminFichier( Cfg( "GENERAL", "FICHIER_DEBITEURS", "DebSiren.dbf" ) )
    LOCAL cChS   := Cfg( "CHAMPS", "SIREN", "SIREN" ), cChCA := Cfg( "CHAMPS", "CA", "CA" )
    LOCAL cSiren := h[ "SIREN" ], nRec := iif( HB_ISNUMERIC( h[ "DEB_RECNO" ] ), h[ "DEB_RECNO" ], 0 )
-   LOCAL lOuvert := .F., lOk := .F., nPosS, nPosCA, lTrouve := .F., xVal, cErreur := "", nAutre := 0
+   LOCAL lOuvert := .F., lOk := .F., nPosS, nPosCA, lTrouve := .F., xVal, cErreur := "", nAutre := 0, cTag
 
    IF Len( cSiren ) != 9
       Attente( "Pas de SIREN valide pour cette proposition.", "OK" )
@@ -905,10 +968,18 @@ STATIC FUNCTION ReporteSiren( h )
             DEBMAJ->( dbGoto( nRec ) )
             lTrouve := ! DEBMAJ->( Deleted() ) .AND. AllTrim( ToS( DEBMAJ->( FieldGet( nPosCA ) ) ) ) == h[ "CA" ]
          ENDIF
-         /* 2) sinon recherche par le CA : premiere fiche de ce CA sans SIREN */
+         /* 2) sinon recherche par le CA (tag d'index du CA s'il existe) : premiere fiche de ce CA sans SIREN */
          IF ! lTrouve
-            DEBMAJ->( dbGoTop() )
-            DO WHILE ! DEBMAJ->( Eof() )
+            SELECT DEBMAJ
+            cTag := TagCA( cChCA )
+            IF Empty( cTag )
+               DEBMAJ->( dbGoTop() )
+            ELSE
+               DEBMAJ->( ordSetFocus( cTag ) )
+               DEBMAJ->( dbSeek( h[ "CA" ], .T. ) )
+            ENDIF
+            DO WHILE ! DEBMAJ->( Eof() ) .AND. ;
+                     ( Empty( cTag ) .OR. Left( ToS( DEBMAJ->( FieldGet( nPosCA ) ) ), Len( h[ "CA" ] ) ) == h[ "CA" ] )
                IF AllTrim( ToS( DEBMAJ->( FieldGet( nPosCA ) ) ) ) == h[ "CA" ]
                   IF Empty( DEBMAJ->( FieldGet( nPosS ) ) )
                      lTrouve := .T.
@@ -1109,6 +1180,7 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL cCA, cRela, cNom, xSiren, cSirenOri, cSiren, cSerie, cCle, cPortNom, cPortId
    LOCAL cAdr, cCP, cVille, lNom, lTrouve
    LOCAL hRes, nTraites := 0, k, xFiltre
+   LOCAL aSeries, lValides := .T., cTag := "", lIndex := .F., nSerie := 1
 
    IF ! hb_FileExists( cFicDeb )
       CsLog( "ERREUR : fichier debiteurs introuvable : " + cFicDeb )
@@ -1162,6 +1234,32 @@ STATIC PROCEDURE MiseEnSurveillance()
       CsLog( "Filtre debiteurs : " + cFiltre )
    ENDIF
 
+   /* series a traiter ([SELECTION] SERIES ou 2e argument) : lecture par le tag d'index du CA */
+   aSeries := ListeSeries( Cfg( "SELECTION", "SERIES", "" ), @lValides )
+   IF ! lValides
+      CsLog( "ERREUR : series invalides : " + Cfg( "SELECTION", "SERIES", "" ) + ;
+             " (3 lettres ou chiffres par serie, separees par des virgules)" )
+      DEB->( dbCloseArea() )
+      SUIVI->( dbCloseArea() )
+      RETURN
+   ENDIF
+   IF Empty( aSeries )
+      CsLog( "Series : toutes (tout le fichier des debiteurs)" )
+   ELSEIF nPosCA == 0
+      CsLog( "ERREUR : champ " + cChCA + " absent de " + cFicDeb + " : selection par series impossible" )
+      DEB->( dbCloseArea() )
+      SUIVI->( dbCloseArea() )
+      RETURN
+   ELSE
+      cTag   := TagCA( cChCA )
+      lIndex := ! Empty( cTag )
+      CsLog( "Series : " + ChaineSeries( aSeries ) + ;
+             iif( lIndex, "  (lecture par le tag " + cTag + " : " + DEB->( ordKey( cTag ) ) + ")", ;
+                  "  - ATTENTION : " + iif( Empty( Cfg( "SELECTION", "TAG_CA", "" ) ), "pas de tag d'index sur " + cChCA, ;
+                       "tag " + Cfg( "SELECTION", "TAG_CA", "" ) + " introuvable (ou sa cle n'est pas " + cChCA + ")" ) + ;
+                  ", lecture de tout le fichier" ) )
+   ENDIF
+
    /* en simulation on interroge quand meme l'API (lecture seule) mais on ne cree rien */
    IF ! Authentifier()
       DEB->( dbCloseArea() )
@@ -1171,9 +1269,37 @@ STATIC PROCEDURE MiseEnSurveillance()
    hPort := ListePortefeuilles()
 
    SELECT DEB
-   DEB->( dbGoTop() )
+   IF lIndex
+      DEB->( ordSetFocus( cTag ) )
+      DEB->( dbSeek( aSeries[ 1 ], .T. ) )
+      DebutSerie( aSeries[ 1 ], nPosCA )
+   ELSE
+      DEB->( dbGoTop() )
+   ENDIF
    PrepareArret()
-   DO WHILE ! DEB->( Eof() )
+   DO WHILE .T.
+
+      /* selection par series */
+      IF lIndex
+         /* fin de la serie courante : on passe a la suivante (dbSeek sur le tag du CA) */
+         DO WHILE nSerie <= Len( aSeries ) .AND. ;
+                  ( DEB->( Eof() ) .OR. ! Left( DEB->( FieldGet( nPosCA ) ), Len( aSeries[ nSerie ] ) ) == aSeries[ nSerie ] )
+            IF ++nSerie <= Len( aSeries )
+               DEB->( dbSeek( aSeries[ nSerie ], .T. ) )
+               DebutSerie( aSeries[ nSerie ], nPosCA )
+            ENDIF
+         ENDDO
+         IF nSerie > Len( aSeries )
+            EXIT
+         ENDIF
+      ELSEIF DEB->( Eof() )
+         EXIT
+      ELSEIF ! Empty( aSeries ) .AND. ;
+             AScan( aSeries, {| c | c == Left( DEB->( FieldGet( nPosCA ) ), Len( c ) ) } ) == 0
+         /* pas de tag : lecture de tout le fichier, on ne garde que les series demandees */
+         DEB->( dbSkip() )
+         LOOP
+      ENDIF
 
       /* Echap ou fichier d'arret : on s'arrete proprement entre deux debiteurs */
       IF DemandeArret()
@@ -2694,6 +2820,92 @@ STATIC FUNCTION DemandeArret()
 
    RETURN .F.
 
+/* ==========================================================================
+ *  SERIES DE DEBITEURS (3 premiers caracteres du CA)
+ * ========================================================================== */
+
+/* "ABC,DEF" -> { "ABC", "DEF" } (majuscules, sans doublon, triees). Vide, TOUT ou * -> {} (tout le fichier).
+   lValides passe a .F. si une serie n'a pas exactement 3 lettres ou chiffres. */
+STATIC FUNCTION ListeSeries( cListe, lValides )
+
+   LOCAL aRes := {}, c, i
+
+   lValides := .T.
+   IF ! HB_ISSTRING( cListe )
+      RETURN {}
+   ENDIF
+   cListe := Upper( AllTrim( cListe ) )
+   IF Empty( cListe ) .OR. cListe == "TOUT" .OR. cListe == "*"
+      RETURN {}
+   ENDIF
+   FOR EACH c IN hb_ATokens( StrTran( StrTran( cListe, ";", "," ), " ", "," ), "," )
+      IF Empty( c )
+         LOOP
+      ENDIF
+      IF Len( c ) != 3
+         lValides := .F.
+      ENDIF
+      FOR i := 1 TO Len( c )
+         IF ! IsDigit( SubStr( c, i, 1 ) ) .AND. ! ( SubStr( c, i, 1 ) >= "A" .AND. SubStr( c, i, 1 ) <= "Z" )
+            lValides := .F.
+         ENDIF
+      NEXT
+      IF AScan( aRes, {| x | x == c } ) == 0
+         AAdd( aRes, c )
+      ENDIF
+   NEXT
+   ASort( aRes )
+
+   RETURN aRes
+
+STATIC FUNCTION ChaineSeries( aSeries )
+
+   LOCAL c := ""
+
+   AEval( aSeries, {| x | c += iif( Empty( c ), "", "," ) + x } )
+
+   RETURN c
+
+/* Argument de la ligne de commande qui designe des series et pas un fichier .ini :
+   sans point ni chemin (la validite des series est controlee ensuite) */
+STATIC FUNCTION EstListeSeries( c )
+   RETURN HB_ISSTRING( c ) .AND. ! Empty( c ) .AND. ! "." $ c .AND. ! "\" $ c .AND. ! "/" $ c .AND. ! ":" $ c
+
+/* Tag d'index de l'alias courant dont la cle est le CA (ou UPPER(CA), ou CA+...) :
+   [SELECTION] TAG_CA s'il est renseigne, sinon recherche automatique. "" si aucun. Sans message. */
+STATIC FUNCTION TagCA( cChCA )
+
+   LOCAL cTag := Cfg( "SELECTION", "TAG_CA", "" ), i, cCle
+
+   cChCA := Upper( cChCA )
+   IF ! Empty( cTag )
+      RETURN iif( ordNumber( cTag ) > 0 .AND. CleCA( ordKey( cTag ), cChCA ), cTag, "" )
+   ENDIF
+   FOR i := 1 TO ordCount()
+      cCle := ordKey( i )
+      IF CleCA( cCle, cChCA )
+         RETURN ordName( i )
+      ENDIF
+   NEXT
+
+   RETURN ""
+
+/* .T. si la cle d'index commence par le champ CA (une recherche sur le debut du CA est alors possible) */
+STATIC FUNCTION CleCA( cCle, cChCA )
+
+   cCle := Upper( StrTran( ToS( cCle ), " ", "" ) )
+
+   RETURN cCle == cChCA .OR. cCle == "UPPER(" + cChCA + ")" .OR. Left( cCle, Len( cChCA ) + 1 ) == cChCA + "+"
+
+/* Journal : debut de lecture d'une serie (apres dbSeek) */
+STATIC PROCEDURE DebutSerie( cSerie, nPosCA )
+
+   CsLog( "--- Serie " + cSerie + ;
+          iif( ! DEB->( Eof() ) .AND. Left( DEB->( FieldGet( nPosCA ) ), Len( cSerie ) ) == cSerie, "", ;
+               " : aucun debiteur dans le fichier" ) )
+
+   RETURN
+
 /* Positions des champs "ADR1+ADR2" (ou "ADR1,ADR2") dans l'alias DEB */
 STATIC FUNCTION PosChamps( cListe, cFic )
 
@@ -2900,6 +3112,9 @@ STATIC FUNCTION IniParDefaut()
       "LIMITE=" + CRLF + ;
       "FILTRE=" + CRLF + ;
       "CONTROLE_LUHN=1" + CRLF + CRLF + ;
+      "[SELECTION]" + CRLF + ;
+      "SERIES=" + CRLF + ;
+      "TAG_CA=CA" + CRLF + CRLF + ;
       "[RECHERCHE]" + CRLF + ;
       "PAR_NOM=1" + CRLF + ;
       "NOM_SEUL=0" + CRLF + ;
