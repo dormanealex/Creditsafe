@@ -1181,6 +1181,8 @@ STATIC PROCEDURE MiseEnSurveillance()
    LOCAL cAdr, cCP, cVille, lNom, lTrouve
    LOCAL hRes, nTraites := 0, k, xFiltre
    LOCAL aSeries, lValides := .T., cTag := "", lIndex := .F., nSerie := 1
+   /* fiches lues et ecartees (avec le motif), au total et pour la serie en cours */
+   LOCAL hCpt := { => }, hCptSerie := { => }
 
    IF ! hb_FileExists( cFicDeb )
       CsLog( "ERREUR : fichier debiteurs introuvable : " + cFicDeb )
@@ -1284,6 +1286,8 @@ STATIC PROCEDURE MiseEnSurveillance()
          /* fin de la serie courante : on passe a la suivante (dbSeek sur le tag du CA) */
          DO WHILE nSerie <= Len( aSeries ) .AND. ;
                   ( DEB->( Eof() ) .OR. ! Left( DEB->( FieldGet( nPosCA ) ), Len( aSeries[ nSerie ] ) ) == aSeries[ nSerie ] )
+            FinSerie( aSeries[ nSerie ], hCptSerie )
+            hCptSerie := { => }
             IF ++nSerie <= Len( aSeries )
                DEB->( dbSeek( aSeries[ nSerie ], .T. ) )
                DebutSerie( aSeries[ nSerie ], nPosCA )
@@ -1305,6 +1309,7 @@ STATIC PROCEDURE MiseEnSurveillance()
       IF DemandeArret()
          EXIT
       ENDIF
+      Ecart( hCpt, hCptSerie, "LUES" )
 
       IF bFiltre != NIL
          /* LOOP / EXIT interdits dans un BEGIN SEQUENCE : on passe par une variable */
@@ -1319,6 +1324,7 @@ STATIC PROCEDURE MiseEnSurveillance()
             EXIT
          ENDIF
          IF ! xFiltre
+            Ecart( hCpt, hCptSerie, "FILTRE" )
             DEB->( dbSkip() )
             LOOP
          ENDIF
@@ -1351,9 +1357,11 @@ STATIC PROCEDURE MiseEnSurveillance()
       lNom   := .F.
 
       IF Empty( cSirenOri )
-         /* pas de SIREN : recherche par nom + adresse si activee, sinon debiteur ignore sans trace */
+         /* pas de SIREN : recherche par nom + adresse si activee, sinon debiteur ecarte (compte dans le bilan) */
          IF ! lParNom .OR. Empty( cNom ) .OR. ;
             ( ! lNomSeul .AND. Empty( Chiffres( cCP ) ) .AND. Empty( cVille ) )
+            Ecart( hCpt, hCptSerie, iif( ! lParNom, "SANS_SIREN_PAR_NOM_INACTIF", ;
+                                         iif( Empty( cNom ), "SANS_SIREN_SANS_NOM", "SANS_SIREN_SANS_CP_VILLE" ) ) )
             DEB->( dbSkip() )
             LOOP
          ENDIF
@@ -1365,6 +1373,7 @@ STATIC PROCEDURE MiseEnSurveillance()
       cCle := cSerie + "|" + cSirenOri
 
       IF hb_HHasKey( hVu, cCle ) .OR. DejaTraite( cSerie, cSirenOri, lNom )
+         Ecart( hCpt, hCptSerie, "DEJA_TRAITE" )
          DEB->( dbSkip() )
          LOOP
       ENDIF
@@ -1438,10 +1447,17 @@ STATIC PROCEDURE MiseEnSurveillance()
    SUIVI->( dbCommit() )
    SUIVI->( dbCloseArea() )
 
+   IF lIndex .AND. nSerie <= Len( aSeries )
+      FinSerie( aSeries[ nSerie ], hCptSerie )     /* serie en cours a l'arret (fin, maximum, interruption) */
+   ENDIF
    CsLog( "Bilan :" )
+   LigneCompteurs( hCpt, cFiltre )
    FOR EACH k IN hb_HKeys( hStat )
       CsLog( "   " + PadR( k, 12 ) + Str( hStat[ k ], 7 ) )
    NEXT
+   IF hb_HGetDef( hCpt, "LUES", 0 ) > 0 .AND. Empty( hStat )
+      CsLog( "   Aucun debiteur transmis a Creditsafe : toutes les fiches lues ont ete ecartees (voir ci-dessus)." )
+   ENDIF
 
    RETURN
 
@@ -2898,6 +2914,51 @@ STATIC FUNCTION CleCA( cCle, cChCA )
    RETURN cCle == cChCA .OR. cCle == "UPPER(" + cChCA + ")" .OR. Left( cCle, Len( cChCA ) + 1 ) == cChCA + "+"
 
 /* Journal : debut de lecture d'une serie (apres dbSeek) */
+/* Compte une fiche lue ou ecartee, au total et pour la serie en cours */
+STATIC PROCEDURE Ecart( hCpt, hCptSerie, cMotif )
+
+   hCpt[ cMotif ]      := hb_HGetDef( hCpt, cMotif, 0 ) + 1
+   hCptSerie[ cMotif ] := hb_HGetDef( hCptSerie, cMotif, 0 ) + 1
+
+   RETURN
+
+/* Journal : fiches lues et ecartees, avec le motif */
+STATIC PROCEDURE LigneCompteurs( hCpt, cFiltre )
+
+   LOCAL aMotifs := { ;
+      { "LUES",                       "Fiches lues" }, ;
+      { "FILTRE",                     "Ecartees par le filtre (" + cFiltre + ")" }, ;
+      { "SANS_SIREN_SANS_NOM",        "Ecartees : sans SIREN et sans nom" }, ;
+      { "SANS_SIREN_SANS_CP_VILLE",   "Ecartees : sans SIREN, ni code postal ni ville" }, ;
+      { "SANS_SIREN_PAR_NOM_INACTIF", "Ecartees : sans SIREN (recherche par nom desactivee)" }, ;
+      { "DEJA_TRAITE",                "Ecartees : deja traitees (ou en double)" } }
+   LOCAL a
+
+   FOR EACH a IN aMotifs
+      IF a:__enumIndex() == 1 .OR. hb_HGetDef( hCpt, a[ 1 ], 0 ) > 0
+         CsLog( "   " + PadR( a[ 2 ], 60 ) + Str( hb_HGetDef( hCpt, a[ 1 ], 0 ), 7 ) )
+      ENDIF
+   NEXT
+
+   RETURN
+
+/* Journal : resume d'une serie terminee */
+STATIC PROCEDURE FinSerie( cSerie, hCptSerie )
+
+   LOCAL nLues := hb_HGetDef( hCptSerie, "LUES", 0 ), nEcart := 0, k
+
+   FOR EACH k IN hb_HKeys( hCptSerie )
+      IF ! k == "LUES"
+         nEcart += hCptSerie[ k ]
+      ENDIF
+   NEXT
+   IF nLues > 0
+      CsLog( "--- Serie " + cSerie + " : " + hb_ntos( nLues ) + " fiche(s) lue(s), " + hb_ntos( nEcart ) + " ecartee(s)" + ;
+             iif( hb_HGetDef( hCptSerie, "FILTRE", 0 ) > 0, ", dont " + hb_ntos( hCptSerie[ "FILTRE" ] ) + " par le filtre", "" ) )
+   ENDIF
+
+   RETURN
+
 STATIC PROCEDURE DebutSerie( cSerie, nPosCA )
 
    CsLog( "--- Serie " + cSerie + ;
