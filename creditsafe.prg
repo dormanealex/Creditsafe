@@ -582,6 +582,8 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
  * ========================================================================== */
 #define LV_HAUT      3           /* premiere ligne du TBrowse (dans le cadre) */
 #define LV_BAS       ( MaxRow() - 5 )   /* derniere ligne du TBrowse */
+#define LV_BARRE     10          /* cases de la barre de confiance dans la liste */
+#define LV_CONF      ( 4 + LV_BARRE )   /* colonne Confiance : note (3) + espace + barre */
 #define COUL_FOND    "W/B"
 #define COUL_TITRE   "N/BG"
 /* TBrowse : 1 normal, 2 ligne choisie, 3 note faible, 4 simulation */
@@ -630,6 +632,7 @@ STATIC PROCEDURE ListeAVerifier()
       IF oB != NIL
          oB:forceStable()
          oB:colorRect( { oB:rowPos, 1, oB:rowPos, oB:colCount }, { 2, 2 } )
+         BarresListe( oB, aListe, nPos )
          @ LV_BAS + 2, 2 SAY PadR( "Ligne " + hb_ntos( nPos ) + " / " + hb_ntos( Len( aListe ) ), 20 ) COLOR COUL_FOND
       ENDIF
       DispEnd()
@@ -760,7 +763,8 @@ STATIC PROCEDURE EcranAVerifier( aListe, cMsg )
    SetColor( COUL_FOND )
    CLS
    @ 0, 0 SAY PadC( "DEBITEURS A VERIFIER (" + hb_ntos( Len( aListe ) ) + ")", MaxCol() + 1 ) COLOR COUL_TITRE
-   @ 1, 2 SAY "Note sur 100 (jaune : note faible).  En cyan :"
+   LegendeConfiance( 1, 2 )
+   @ 1, Col() + 4 SAY "En cyan :"
    @ 1, Col() + 1 SAY "simulation" COLOR "BG/B"
    DispBox( LV_HAUT - 1, 0, LV_BAS + 1, MaxCol(), B_DOUBLE_SINGLE + " ", "W+/B" )
    IF Empty( aListe )
@@ -774,7 +778,7 @@ STATIC PROCEDURE EcranAVerifier( aListe, cMsg )
 /* TBrowse sur le tableau des A_VERIFIER (NIL si la liste est vide) */
 STATIC FUNCTION NavigateurAVerifier( aListe, nPos, nNoteMin )
 
-   LOCAL oB, oC, bCoul, aCols, aC
+   LOCAL oB, oC, bCoul, aCols, aC, nLibre
 
    IF Empty( aListe )
       RETURN NIL
@@ -788,29 +792,95 @@ STATIC FUNCTION NavigateurAVerifier( aListe, nPos, nNoteMin )
    oB:goBottomBlock := {|| nPos := Len( aListe ) }
    oB:skipBlock     := {| n | n := Max( 1 - nPos, Min( Len( aListe ) - nPos, n ) ), nPos += n, n }
 
+   HB_SYMBOL_UNUSED( nNoteMin )
    bCoul := {|| iif( aListe[ nPos ][ "MODE" ] == "REEL", { 1, 2 }, { 4, 2 } ) }      /* simulation en cyan */
 
-   /* colonnes : { titre, champ, largeur }. Separateurs de 3 caracteres.
-      132 colonnes (largeur utile 130) : 7+26+5+16+26+16+9 = 105, + note 4, + 7 x 3 = 130
-      80 colonnes  (largeur utile 78)  : 7+18+5+20+9 = 59, + note 4, + 5 x 3 = 78 */
+   /* colonnes : { titre, champ, largeur }, separateurs de 3 caracteres. Les largeurs remplissent
+      exactement la largeur utile (sinon le TBrowse repartit l'espace et la barre serait decalee) :
+      la largeur de "Societe proposee" (0 ci-dessous) est calculee.
+      Derniere colonne : Confiance = note (3) + espace + barre de LV_BARRE cases, dessinee par BarresListe(). */
    IF MaxCol() >= 131
-      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 26 }, { "CP", "CP_DEB", 5 }, { "Ville", "VILLE_DEB", 16 }, ;
-                 { "Societe proposee", "CS_NOM", 26 }, { "Ville (societe)", "CS_VILLE", 16 }, { "SIREN", "SIREN", 9 } }
+      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 22 }, { "CP", "CP_DEB", 5 }, { "Ville", "VILLE_DEB", 14 }, ;
+                 { "Societe proposee", "CS_NOM", 0 }, { "Ville societe", "CS_VILLE", 14 }, { "SIREN", "SIREN", 9 } }
    ELSE
-      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 18 }, { "CP", "CP_DEB", 5 }, ;
-                 { "Societe proposee", "CS_NOM", 20 }, { "SIREN", "SIREN", 9 } }
+      aCols := { { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 14 }, { "CP", "CP_DEB", 5 }, ;
+                 { "Societe proposee", "CS_NOM", 0 }, { "SIREN", "SIREN", 9 } }
    ENDIF
+   nLibre := ( oB:nRight - oB:nLeft + 1 ) - ( LV_CONF + Len( aCols ) * 3 )
+   AEval( aCols, {| a | nLibre -= a[ 3 ] } )
    FOR EACH aC IN aCols
+      IF aC[ 3 ] == 0
+         aC[ 3 ] := Max( 8, nLibre )
+      ENDIF
       oC := TBColumnNew( aC[ 1 ], ColonneAV( aListe, @nPos, aC[ 2 ], aC[ 3 ] ) )
+      oC:width      := aC[ 3 ]
       oC:colorBlock := bCoul
       oB:addColumn( oC )
    NEXT
-   /* notes faibles en jaune */
-   oC := TBColumnNew( "Note", {|| Str( NoteAV( aListe[ nPos ] ), 4 ) } )
-   oC:colorBlock := {|| iif( NoteAV( aListe[ nPos ] ) < nNoteMin, { 3, 2 }, Eval( bCoul ) ) }
+   oC := TBColumnNew( "Confiance", {|| Str( NoteAV( aListe[ nPos ] ), 3 ) + Space( LV_CONF - 3 ) } )
+   oC:width      := LV_CONF
+   oC:colorBlock := bCoul
    oB:addColumn( oC )
 
    RETURN oB
+
+/* Barres de confiance de la liste, dessinees par-dessus la colonne Confiance (derniere colonne)
+   de chaque ligne visible ; la ligne choisie garde son fond. */
+STATIC PROCEDURE BarresListe( oB, aListe, nPos )
+
+   LOCAL nPremiere := oB:nBottom - oB:rowCount + 1, nCol := oB:nRight - LV_CONF + 1 + 4, r, nInd
+
+   FOR r := 1 TO oB:rowCount
+      nInd := nPos - oB:rowPos + r
+      IF nInd >= 1 .AND. nInd <= Len( aListe )
+         BarreConfiance( nPremiere + r - 1, nCol, NoteAV( aListe[ nInd ] ), LV_BARRE, iif( r == oB:rowPos, "BG", "B" ) )
+      ENDIF
+   NEXT
+
+   RETURN
+
+/* Legende des couleurs de confiance */
+STATIC PROCEDURE LegendeConfiance( nLig, nCol )
+
+   LOCAL nAuto := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) )
+
+   /* hb_DispOutAtBox() ne deplace pas le curseur : on avance la colonne a la main */
+   @ nLig, nCol SAY "Confiance (note sur 100) :"
+   nCol := Col() + 1
+   hb_DispOutAtBox( nLig, nCol, Replicate( Chr( 219 ), 2 ), "G+/B" )
+   @ nLig, nCol + 3 SAY "forte >= " + hb_ntos( nAuto )
+   nCol := Col() + 3
+   hb_DispOutAtBox( nLig, nCol, Replicate( Chr( 219 ), 2 ), "GR+/B" )
+   @ nLig, nCol + 3 SAY "moyenne " + hb_ntos( nAuto - 15 ) + "-" + hb_ntos( nAuto - 1 )
+   nCol := Col() + 3
+   hb_DispOutAtBox( nLig, nCol, Replicate( Chr( 219 ), 2 ), "R+/B" )
+   @ nLig, nCol + 3 SAY "faible < " + hb_ntos( nAuto - 15 )
+
+   RETURN
+
+/* Niveau de confiance d'une note : 3 forte (>= SCORE_AUTO), 2 moyenne (>= SCORE_AUTO - 15), 1 faible */
+STATIC FUNCTION NiveauConfiance( nScore )
+
+   LOCAL nAuto := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) )
+
+   RETURN iif( nScore >= nAuto, 3, iif( nScore >= nAuto - 15, 2, 1 ) )
+
+STATIC FUNCTION CouleurConfiance( nScore )
+   RETURN { "R+", "GR+", "G+" }[ NiveauConfiance( nScore ) ]
+
+STATIC FUNCTION LibelleConfiance( nScore )
+   RETURN { "FAIBLE", "MOYENNE", "FORTE" }[ NiveauConfiance( nScore ) ]
+
+/* Barre de confiance : nLarg cases, pleines (couleur du niveau) a proportion de la note sur 100,
+   le reste en gris. Caracteres "boite" (bloc plein et grise), affiches par hb_DispOutAtBox(). */
+STATIC PROCEDURE BarreConfiance( nLig, nCol, nScore, nLarg, cFond )
+
+   LOCAL nPlein := Max( 0, Min( nLarg, Round( nScore * nLarg / 100, 0 ) ) )
+
+   hb_DispOutAtBox( nLig, nCol, Replicate( Chr( 219 ), nPlein ), CouleurConfiance( nScore ) + "/" + cFond )
+   hb_DispOutAtBox( nLig, nCol + nPlein, Replicate( Chr( 176 ), nLarg - nPlein ), "N+/" + cFond )
+
+   RETURN
 
 /* Bloc d'une colonne texte (fonction a part : chaque bloc garde son propre champ) */
 STATIC FUNCTION ColonneAV( aListe, nPos, cChamp, nLarg )
@@ -918,6 +988,8 @@ STATIC FUNCTION DetailAVerifier( aListe, nInd )
          @ 10, 3 SAY "Adresse  : " + Left( h[ "CS_ADRESSE" ], 64 )
          @ 11, 3 SAY "           " + h[ "CS_CP" ] + " " + h[ "CS_VILLE" ]
          @ 12, 3 SAY "Etat     : " + h[ "CS_STATUT" ] + iif( Empty( h[ "CS_TYPE" ] ), "", "  (" + h[ "CS_TYPE" ] + ")" )
+         BarreConfiance( 13, 50, NoteAV( h ), 18, "B" )
+         @ 13, 70 SAY LibelleConfiance( NoteAV( h ) ) COLOR CouleurConfiance( NoteAV( h ) ) + "/B"
          @ 13, 3 SAY "Note     : " + hb_ntos( NoteAV( h ) ) + " / 100" + ;
                      "    " + hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s)"
 
@@ -992,6 +1064,34 @@ STATIC FUNCTION DetailAVerifier( aListe, nInd )
 
    RETURN lReporte
 
+/* Jauge de confiance du detail (cadre de 4 lignes a partir de nLig, toute la largeur) :
+   note, niveau en clair, barre de 0 a 100 et repere du seuil de mise en surveillance automatique */
+STATIC PROCEDURE JaugeConfiance( nLig, nScore )
+
+   LOCAL nAuto := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) )
+   LOCAL nCol := 30, nLarg := MaxCol() - nCol - 6, nRepere, cRepere
+
+   DispBox( nLig, 0, nLig + 4, MaxCol(), B_SINGLE + " ", "W+/B" )
+   @ nLig, 2 SAY " Confiance dans la proposition " COLOR "W+/B"
+   @ nLig + 1, 3 SAY "Note " + Str( nScore, 3 ) + " / 100"
+   @ nLig + 2, 3 SAY PadC( LibelleConfiance( nScore ), 13 ) COLOR "N/" + StrTran( CouleurConfiance( nScore ), "+", "" )
+   @ nLig + 2, 17 SAY "confiance"
+   BarreConfiance( nLig + 1, nCol, nScore, nLarg, "B" )
+   BarreConfiance( nLig + 2, nCol, nScore, nLarg, "B" )
+   /* echelle et repere du seuil de mise en surveillance automatique */
+   nRepere := nCol + Round( nAuto * nLarg / 100, 0 )
+   cRepere := hb_ntos( nAuto ) + " = seuil de surveillance automatique"
+   @ nLig + 3, nCol SAY "0"
+   @ nLig + 3, nCol + nLarg - 3 SAY "100"
+   @ nLig + 3, nRepere SAY "^" COLOR "W+/B"
+   IF nRepere + 2 + Len( cRepere ) <= nCol + nLarg - 5
+      @ nLig + 3, nRepere + 2 SAY cRepere
+   ELSE
+      @ nLig + 3, nRepere - 1 - Len( cRepere ) SAY cRepere
+   ENDIF
+
+   RETURN
+
 /* Detail en 132 colonnes : debiteur et societe proposee cote a cote */
 STATIC PROCEDURE DetailLarge( h, cMsg )
 
@@ -1015,20 +1115,22 @@ STATIC PROCEDURE DetailLarge( h, cMsg )
    @ 7, nMil + 3 SAY "Note     : " + hb_ntos( NoteAV( h ) ) + " / 100    " + ;
                      hb_ntos( iif( HB_ISNUMERIC( h[ "NB_RESULT" ] ), h[ "NB_RESULT" ], 0 ) ) + " societe(s) trouvee(s)"
 
-   DispBox( 10, 0, 14, MaxCol(), B_SINGLE + " ", "W+/B" )
-   @ 10, 2 SAY " Resultat de la recherche " COLOR "W+/B"
+   JaugeConfiance( 10, NoteAV( h ) )
+
+   DispBox( 15, 0, 19, MaxCol(), B_SINGLE + " ", "W+/B" )
+   @ 15, 2 SAY " Resultat de la recherche " COLOR "W+/B"
    nP := At( "|", cMsg )
    IF nP > 0
-      @ 11, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), MaxCol() - 5 )
-      @ 12, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), MaxCol() - 5 )
+      @ 16, 3 SAY Left( AllTrim( Left( cMsg, nP - 1 ) ), MaxCol() - 5 )
+      @ 17, 3 SAY Left( AllTrim( SubStr( cMsg, nP + 1 ) ), MaxCol() - 5 )
    ELSE
-      @ 11, 3 SAY Left( cMsg, MaxCol() - 5 )
-      @ 12, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
+      @ 16, 3 SAY Left( cMsg, MaxCol() - 5 )
+      @ 17, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
    ENDIF
 
-   @ 16, 2 SAY "Bonne societe    : Reporter le SIREN (ecrit dans le fichier des debiteurs, surveillance au prochain passage)."
-   @ 17, 2 SAY "Mauvaise societe : Rejeter (le debiteur ne sera plus recherche par son nom)."
-   @ 18, 2 SAY "< Precedent / Suivant > (ou fleches, PgUp/PgDn) : debiteur precedent / suivant de la liste."
+   @ 21, 2 SAY "Bonne societe    : Reporter le SIREN (ecrit dans le fichier des debiteurs, surveillance au prochain passage)."
+   @ 22, 2 SAY "Mauvaise societe : Rejeter (le debiteur ne sera plus recherche par son nom)."
+   @ 23, 2 SAY "< Precedent / Suivant > (ou fleches, PgUp/PgDn) : debiteur precedent / suivant de la liste."
 
    RETURN
 
