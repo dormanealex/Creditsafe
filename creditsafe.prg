@@ -176,37 +176,42 @@ STATIC PROCEDURE MenuPrincipal()
       CLS
       EnteteMenu()
       aItems := { "1. Tester la connexion Creditsafe", ;
-                  "2. Mettre en surveillance les debiteurs", ;
-                  "3. Recuperer les alertes", ;
-                  "4. Bilan du fichier de suivi", ;
-                  "5. Debiteurs a verifier (A_VERIFIER)", ;
-                  "6. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
-                  "7. Series a traiter", ;
-                  "8. Nombre maximum de debiteurs a traiter", ;
-                  "9. Modifier les parametres (Bloc-notes)", ;
+                  "2. Series a traiter", ;
+                  "3. Mettre en surveillance les debiteurs", ;
+                  "4. Recuperer les alertes", ;
+                  "5. Bilan du fichier de suivi", ;
+                  "6. Debiteurs a verifier (A_VERIFIER)", ;
+                  "7. Societes sous surveillance", ;
+                  "8. Passer en mode " + iif( s_lSimul, "REEL", "SIMULATION" ), ;
+                  "9. Nombre maximum de debiteurs a traiter", ;
+                  "P. Modifier les parametres (Bloc-notes)", ;
                   "J. Consulter le journal (Bloc-notes)", ;
                   "0. Quitter" }
-      @ 23, Int( ( MaxCol() - 51 ) / 2 ) SAY "Clic sur un choix, ou fleches + Entree, ou chiffre."
+      @ 11 + Len( aItems ) + 1, Int( ( MaxCol() - 51 ) / 2 ) SAY "Clic sur un choix, ou fleches + Entree, ou chiffre / lettre."
       nChoix := ChoixMenu( aItems, 11, Int( ( MaxCol() - 51 ) / 2 ), 52, nChoix )
 
       DO CASE
-      CASE nChoix == 0 .OR. nChoix == 11 .OR. s_lFermer
+      CASE nChoix == 0 .OR. nChoix == 12 .OR. s_lFermer
          lFin := .T.
          nChoix := 1
       CASE nChoix == 1
          LanceFonction( "TEST" )
       CASE nChoix == 2
+         SaisieSeries()
+      CASE nChoix == 3
          IF s_lSimul .OR. Confirme( "Mode REEL" + iif( "SANDBOX" $ Upper( s_cBaseUrl ), " (sandbox)", " sur LIVE" ) + ;
                                     " : les societes seront ajoutees. Continuer ?" )
             LanceFonction( "SURVEIL" )
          ENDIF
-      CASE nChoix == 3
-         LanceFonction( "ALERTES" )
       CASE nChoix == 4
-         BilanSuivi()
+         LanceFonction( "ALERTES" )
       CASE nChoix == 5
-         ListeAVerifier()
+         BilanSuivi()
       CASE nChoix == 6
+         ListeAVerifier()
+      CASE nChoix == 7
+         ListeSurveillance()
+      CASE nChoix == 8
          IF s_lSimul
             IF Confirme( "Passer en mode REEL (les societes seront vraiment ajoutees) ?" )
                CfgSession( "GENERAL", "SIMULATION", "0" )
@@ -214,13 +219,11 @@ STATIC PROCEDURE MenuPrincipal()
          ELSE
             CfgSession( "GENERAL", "SIMULATION", "1" )
          ENDIF
-      CASE nChoix == 7
-         SaisieSeries()
-      CASE nChoix == 8
-         SaisieMaxDebiteurs()
       CASE nChoix == 9
-         ModifieParametres()
+         SaisieMaxDebiteurs()
       CASE nChoix == 10
+         ModifieParametres()
+      CASE nChoix == 11
          OuvreBlocNotes( CheminFichier( Cfg( "GENERAL", "FICHIER_LOG", "creditsafe.log" ) ) )
       ENDCASE
    ENDDO
@@ -889,6 +892,260 @@ STATIC FUNCTION ColonneAV( aListe, nPos, cChamp, nLarg )
 STATIC FUNCTION NoteAV( h )
    RETURN iif( HB_ISNUMERIC( h[ "SCORE" ] ), h[ "SCORE" ], 0 )
 
+/* ==========================================================================
+ *  SOCIETES SOUS SURVEILLANCE
+ *  Source : Creditsafe (societes de chaque portefeuille PREFIXE_NOM...), completees par le
+ *  fichier de suivi (CA, debiteur, date d'ajout) grace a l'identifiant Creditsafe.
+ *  Si Creditsafe est injoignable : societes AJOUTE / DEJA du suivi (mode REEL).
+ * ========================================================================== */
+STATIC PROCEDURE ListeSurveillance()
+
+   LOCAL aListe, cSource := "", nPos := 1, oB, nTouche, aPos, lFin := .F., lRelire := .T., lFond := .T.
+   LOCAL aBoutons := iif( MaxCol() >= 131, { "Actualiser", "Copier le SIREN", "Retour au menu" }, ;
+                                           { "Actualiser", "Copier", "Menu" } )
+
+   DO WHILE ! lFin .AND. ! s_lFermer
+      IF lRelire
+         SetColor( COUL_FOND )
+         CLS
+         @ Int( MaxRow() / 2 ), 0 SAY PadC( "Lecture des societes sous surveillance chez Creditsafe...", MaxCol() + 1 )
+         aListe  := LitSurveillance( @cSource )
+         nPos    := 1
+         oB      := NavigateurSurveillance( aListe, @nPos )
+         lRelire := .F.
+         lFond   := .T.
+      ENDIF
+
+      DispBegin()
+      IF lFond
+         SetColor( COUL_FOND )
+         CLS
+         @ 0, 0 SAY PadC( "SOCIETES SOUS SURVEILLANCE (" + hb_ntos( Len( aListe ) ) + ")", MaxCol() + 1 ) COLOR COUL_TITRE
+         @ 1, 2 SAY Left( "Source : " + cSource, MaxCol() - 3 ) COLOR iif( "ATTENTION" $ cSource, "GR+/B", COUL_FOND )
+         DispBox( LV_HAUT - 1, 0, LV_BAS + 1, MaxCol(), B_DOUBLE_SINGLE + " ", "W+/B" )
+         IF Empty( aListe )
+            @ LV_HAUT + 2, 4 SAY "Aucune societe sous surveillance."
+         ELSE
+            @ LV_BAS + 2, 24 SAY "Molette, fleches, PgUp/PgDn : defiler."
+         ENDIF
+         aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
+         IF oB != NIL
+            oB:refreshAll()
+         ENDIF
+         lFond := .F.
+      ENDIF
+      IF oB != NIL
+         oB:forceStable()
+         oB:colorRect( { oB:rowPos, 1, oB:rowPos, oB:colCount }, { 2, 2 } )
+         @ LV_BAS + 2, 2 SAY PadR( "Ligne " + hb_ntos( nPos ) + " / " + hb_ntos( Len( aListe ) ), 20 ) COLOR COUL_FOND
+      ENDIF
+      DispEnd()
+
+      nTouche := Inkey( 0, iif( oB == NIL, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT, HB_INKEY_ALL ) )
+      DO CASE
+      CASE nTouche == HB_K_CLOSE
+         s_lFermer := .T.
+      CASE nTouche == K_ESC .OR. nTouche == K_RBUTTONDOWN
+         lFin := .T.
+      CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
+         IF oB != NIL .AND. LigneSouris( oB, Len( aListe ), @nPos )
+            /* clic sur une ligne : elle devient la ligne choisie */
+         ELSE
+            SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
+            CASE 1
+               lRelire := .T.
+               EXIT
+            CASE 2
+               IF oB != NIL
+                  CopieSiren( aListe[ nPos ] )
+                  lFond := .T.
+               ENDIF
+               EXIT
+            CASE 3
+               lFin := .T.
+               EXIT
+            ENDSWITCH
+         ENDIF
+      CASE nTouche == K_MOUSEMOVE
+         IF oB != NIL
+            LigneSouris( oB, Len( aListe ), @nPos )
+         ENDIF
+      CASE oB != NIL .AND. nTouche < 1000 .OR. nTouche == K_MWFORWARD .OR. nTouche == K_MWBACKWARD
+         IF oB != NIL
+            oB:refreshCurrent()
+            oB:applyKey( nTouche )
+         ENDIF
+      ENDCASE
+   ENDDO
+   SetColor( COUL_MENU )
+
+   RETURN
+
+/* Societes sous surveillance : tableau de hashes PORTF, CA, NOM_DEB, CS_NOM, SIREN, CS_VILLE, DATE, CS_ID.
+   cSource (par reference) decrit l'origine de la liste. */
+STATIC FUNCTION LitSurveillance( cSource )
+
+   LOCAL cPrefixe := Upper( Cfg( "PORTEFEUILLE", "PREFIXE_NOM", "DEBITEURS-" ) )
+   LOCAL hSuivi := SuiviSurveilles(), aListe := {}, hPort, cNom, aSoc, hC, h, cId, lOk := .T., nPort := 0
+
+   IF Authentifier()
+      hPort := ListePortefeuilles()
+      FOR EACH cNom IN hb_HKeys( hPort )
+         IF ! Empty( cPrefixe ) .AND. ! Left( cNom, Len( cPrefixe ) ) == cPrefixe
+            LOOP
+         ENDIF
+         nPort++
+         aSoc := SocietesPortefeuille( hPort[ cNom ], @lOk )
+         FOR EACH hC IN aSoc
+            cId := ToS( PremierNonVide( { JGet( hC, "id" ), JGet( hC, "companyId" ), JGet( hC, "connectId" ) } ) )
+            h := iif( hb_HHasKey( hSuivi, cId ), hb_HClone( hSuivi[ cId ] ), ;
+                      { "CA" => "", "NOM_DEB" => "", "SIREN" => "", "CS_VILLE" => "", "DATE" => "" } )
+            h[ "PORTF" ]  := cNom
+            h[ "CS_ID" ]  := cId
+            h[ "CS_NOM" ] := PremierNonVide( { JGet( hC, "name" ), JGet( hC, "companyName" ), hb_HGetDef( h, "CS_NOM", "" ) } )
+            IF Empty( h[ "CA" ] )
+               h[ "CA" ] := ToS( JGet( hC, "personalReference" ) )         /* le CA est envoye en reference */
+            ENDIF
+            IF Empty( h[ "NOM_DEB" ] )
+               h[ "NOM_DEB" ] := ToS( JGet( hC, "freeText" ) )             /* et le nom du debiteur en texte libre */
+            ENDIF
+            IF Empty( h[ "SIREN" ] )
+               h[ "SIREN" ] := Left( Chiffres( ToS( PremierNonVide( { JGet( hC, "regNo" ), JGet( hC, "registrationNumber" ) } ) ) ), 9 )
+            ENDIF
+            AAdd( aListe, h )
+         NEXT
+      NEXT
+      cSource := "Creditsafe (" + Upper( Cfg( "API", "ENVIRONNEMENT", "SANDBOX" ) ) + "), " + hb_ntos( nPort ) + ;
+                 " portefeuille(s) " + Cfg( "PORTEFEUILLE", "PREFIXE_NOM", "DEBITEURS-" ) + "..., complete par le fichier de suivi" + ;
+                 iif( lOk, "", "  -  ATTENTION : lecture incomplete d'un portefeuille (voir le journal)" )
+   ELSE
+      /* Creditsafe injoignable : ce que le suivi indique comme ajoute */
+      FOR EACH h IN hSuivi
+         AAdd( aListe, h )
+      NEXT
+      cSource := "fichier de suivi  -  ATTENTION : Creditsafe injoignable (voir le journal), liste a confirmer"
+   ENDIF
+   ASort( aListe,,, {| x, y | iif( x[ "PORTF" ] == y[ "PORTF" ], x[ "CA" ] < y[ "CA" ], x[ "PORTF" ] < y[ "PORTF" ] ) } )
+
+   RETURN aListe
+
+/* Societes d'un portefeuille Creditsafe (toutes les pages). lOk passe a .F. si une page n'a pas pu etre lue. */
+STATIC FUNCTION SocietesPortefeuille( cId, lOk )
+
+   LOCAL aRes := {}, nPage := 0, nSize := 100, nStatus, cResp, hJson, aP, hC, lPage1 := .F., hVu := { => }, nNew, cCle
+
+   DO WHILE nPage < 1000
+      nStatus := 0
+      cResp   := ""
+      hJson   := NIL
+      IF ! HttpJson( "GET", "/monitoring/portfolios/" + cId + "/companies?page=" + hb_ntos( nPage ) + "&pageSize=" + hb_ntos( nSize ), ;
+                     NIL, @nStatus, @cResp, @hJson )
+         IF nStatus != 404
+            CsLog( "ERREUR lecture des societes du portefeuille " + cId + " : HTTP " + hb_ntos( nStatus ) + " " + MessageErreur( cResp ), .F. )
+            lOk := .F.
+         ENDIF
+         EXIT
+      ENDIF
+      aP := iif( HB_ISARRAY( hJson ), hJson, JFindTableau( hJson, "id" ) )
+      IF Empty( aP )
+         aP := JFindTableau( hJson, "companyId" )
+      ENDIF
+      IF Empty( aP )
+         /* pagination a partir de 1 ? */
+         IF nPage == 0 .AND. ! lPage1
+            lPage1 := .T.
+            nPage  := 1
+            LOOP
+         ENDIF
+         EXIT
+      ENDIF
+      nNew := 0
+      FOR EACH hC IN aP
+         cCle := ToS( PremierNonVide( { JGet( hC, "id" ), JGet( hC, "companyId" ), JGet( hC, "safeNumber" ) } ) )
+         IF HB_ISHASH( hC ) .AND. ! hb_HHasKey( hVu, cCle )
+            hVu[ cCle ] := .T.
+            AAdd( aRes, hC )
+            nNew++
+         ENDIF
+      NEXT
+      IF Len( aP ) < nSize .OR. nNew == 0
+         EXIT
+      ENDIF
+      nPage++
+   ENDDO
+
+   RETURN aRes
+
+/* Suivi : derniere ligne AJOUTE / DEJA (mode REEL) de chaque societe, indexee par l'identifiant Creditsafe */
+STATIC FUNCTION SuiviSurveilles()
+
+   LOCAL cFic := CheminFichier( Cfg( "GENERAL", "FICHIER_SUIVI", "CsSuivi.dbf" ) ), hRes := { => }, lOk := .T., cId
+
+   IF ! hb_FileExists( cFic )
+      RETURN hRes
+   ENDIF
+   BEGIN SEQUENCE WITH {| e | Break( e ) }
+      dbUseArea( .T., "SIXCDX", cFic, "AVERIF", .T., .T., CdpDbf() )
+   RECOVER
+      lOk := .F.
+   END SEQUENCE
+   IF ! lOk
+      RETURN hRes
+   ENDIF
+   AVERIF->( ordSetFocus( 0 ) )
+   AVERIF->( dbGoTop() )
+   DO WHILE ! AVERIF->( Eof() )
+      cId := AllTrim( AVERIF->CS_ID )
+      IF AllTrim( AVERIF->MODE ) == "REEL" .AND. ! Empty( cId ) .AND. ;
+         ( AllTrim( AVERIF->STATUT ) == "AJOUTE" .OR. AllTrim( AVERIF->STATUT ) == "DEJA" )
+         hRes[ cId ] := { "PORTF" => ChampSuivi( "PORTF_NOM" ), "CA" => ChampSuivi( "CA" ), "NOM_DEB" => ChampSuivi( "NOM_DEB" ), ;
+                          "CS_NOM" => ChampSuivi( "CS_NOM" ), "SIREN" => ChampSuivi( "SIREN" ), "CS_VILLE" => ChampSuivi( "CS_VILLE" ), ;
+                          "DATE" => DToC( AVERIF->DATE_TRT ), "CS_ID" => cId }
+      ENDIF
+      AVERIF->( dbSkip() )
+   ENDDO
+   AVERIF->( dbCloseArea() )
+
+   RETURN hRes
+
+/* TBrowse des societes sous surveillance (NIL si la liste est vide) */
+STATIC FUNCTION NavigateurSurveillance( aListe, nPos )
+
+   LOCAL oB, oC, aCols, aC, nLibre
+
+   IF Empty( aListe )
+      RETURN NIL
+   ENDIF
+   oB := TBrowseNew( LV_HAUT, 1, LV_BAS, MaxCol() - 1 )
+   oB:colorSpec     := COUL_LISTE
+   oB:headSep       := Chr( 205 ) + Chr( 209 ) + Chr( 205 )
+   oB:colSep        := " " + Chr( 179 ) + " "
+   oB:autoLite      := .F.
+   oB:goTopBlock    := {|| nPos := 1 }
+   oB:goBottomBlock := {|| nPos := Len( aListe ) }
+   oB:skipBlock     := {| n | n := Max( 1 - nPos, Min( Len( aListe ) - nPos, n ) ), nPos += n, n }
+
+   /* largeurs exactes (0 = calculee pour remplir la largeur utile) */
+   IF MaxCol() >= 131
+      aCols := { { "Portefeuille", "PORTF", 13 }, { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 22 }, ;
+                 { "Societe surveillee", "CS_NOM", 0 }, { "SIREN", "SIREN", 9 }, { "Ville", "CS_VILLE", 14 }, { "Ajoutee le", "DATE", 10 } }
+   ELSE
+      aCols := { { "Portefeuille", "PORTF", 13 }, { "CA", "CA", 7 }, { "Debiteur", "NOM_DEB", 14 }, ;
+                 { "Societe surveillee", "CS_NOM", 0 }, { "SIREN", "SIREN", 9 } }
+   ENDIF
+   nLibre := ( oB:nRight - oB:nLeft + 1 ) - ( Len( aCols ) - 1 ) * 3
+   AEval( aCols, {| a | nLibre -= a[ 3 ] } )
+   FOR EACH aC IN aCols
+      IF aC[ 3 ] == 0
+         aC[ 3 ] := Max( 8, nLibre )
+      ENDIF
+      oC := TBColumnNew( aC[ 1 ], ColonneAV( aListe, @nPos, aC[ 2 ], aC[ 3 ] ) )
+      oC:width := aC[ 3 ]
+      oB:addColumn( oC )
+   NEXT
+
+   RETURN oB
+
 /* Lit le suivi : derniere ligne de chaque debiteur (par mode) dont le statut est A_VERIFIER */
 STATIC FUNCTION LitAVerifier( cMsg )
 
@@ -1355,7 +1612,7 @@ STATIC PROCEDURE BilanSuivi()
          QOut( "Dont " + hb_ntos( nNom ) + " debiteur(s) traite(s) en REEL par nom + adresse." )
          nLigne := AScan( aStatuts, {| x | x == "A_VERIFIER" } )
          IF nLigne > 0
-            QOut( "A_VERIFIER : voir le choix 5 du menu, puis reporter le SIREN dans les debiteurs." )
+            QOut( "A_VERIFIER : voir le choix 6 du menu (Reporter le SIREN ou Rejeter)." )
          ENDIF
       ENDIF
    ENDIF
