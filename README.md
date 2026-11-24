@@ -9,7 +9,17 @@ Programme Harbour `creditsafe.prg` qui utilise l'API Creditsafe Connect v1 (Glob
 | `creditsafe SURVEIL` | met en surveillance les débiteurs de `DebSiren.dbf` (par SIREN, ou par nom + adresse si le SIREN manque) |
 | `creditsafe ALERTES` | récupère les alertes dans `CsAlertes.dbf` |
 
-Un 2ᵉ argument facultatif indique un autre fichier de paramètres : `creditsafe SURVEIL d:\autre.ini`.
+Arguments facultatifs : **séries** en 2ᵉ position, **fichier de paramètres** en 3ᵉ :
+
+```
+creditsafe SURVEIL ABC,DEF
+creditsafe SURVEIL ABC,DEF d:\autre.ini
+creditsafe SURVEIL TOUT                    (tout le fichier, même si le .ini indique des séries)
+creditsafe SURVEIL d:\autre.ini            (ancienne forme, toujours acceptée)
+```
+
+Un 2ᵉ argument sans point ni chemin est lu comme une liste de séries. Si elle est invalide, le programme s'arrête
+avec un message dans le journal.
 
 **Tâches planifiées** : indiquez toujours la fonction (`creditsafe ALERTES`, `creditsafe SURVEIL`). Sans argument,
 le programme ouvre le menu et attend qu'on appuie sur une touche.
@@ -27,9 +37,10 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
 | 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN** |
 | 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
-| 7 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
-| 8 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
-| 9 | Consulter le journal dans le Bloc-notes |
+| 7 | **Séries à traiter** (ex. `ABC,DEF` ; vide = tout le fichier), **pour la session seulement** |
+| 8 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
+| 9 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
+| J | Consulter le journal dans le Bloc-notes |
 | 0 | Quitter (ou Échap) |
 
 Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se pilote **à la souris** :
@@ -44,8 +55,8 @@ Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se
 Lancé par double-clic, le programme ferme la console vide ouverte par Windows. Les lancements avec argument
 (`SURVEIL`, `ALERTES`, `TEST`, donc les tâches planifiées) restent en console, sans fenêtre.
 
-Au clavier, on choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 6 et 7 ne modifient pas le fichier `.ini` :
-ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on recharge les paramètres (choix 8).
+Au clavier, on choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 6, 7 et 8 ne modifient pas le fichier `.ini` :
+ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on recharge les paramètres (choix 9).
 
 ## Compilation (Windows)
 
@@ -84,6 +95,27 @@ des portefeuilles, etc. Les identifiants peuvent être mis dans les variables d'
 | | SIREN | `SIREN+DTOS(D_EVT)` |
 | | DATE | `DTOS(D_EVT)` |
 | | CSID | `CS_ID` |
+
+## Sélection par séries
+
+Une **série** est formée des **3 premiers caractères du CA** (en majuscules). Pour ne traiter que certaines séries :
+
+```ini
+[SELECTION]
+SERIES=ABC,DEF
+TAG_CA=CA
+```
+
+* `SERIES` vide (ou `TOUT` en argument) : tout le fichier des débiteurs.
+* Les séries sont lues **par le tag d'index du CA** (`TAG_CA`, clé `CA`) : `dbSeek` sur chaque série, puis lecture
+  tant que le CA commence par la série. Le journal indique `--- Serie ABC` au début de chaque série, ou
+  « aucun débiteur dans le fichier ».
+* Sans tag utilisable (absent, ou clé différente de `CA`, `UPPER(CA)` ou `CA+...`), tout le fichier est lu et seules
+  les séries demandées sont gardées, avec un avertissement dans le journal.
+* Le `FILTRE` (ex. `TYPDEB=="PROF"`) s'applique en plus.
+* Les **portefeuilles** Creditsafe restent regroupés par les **2** premières lettres du CA.
+* Le suivi, la liste des débiteurs à vérifier et le bilan portent toujours sur tout le suivi.
+* Dans le menu, le choix **7. Séries à traiter** modifie les séries pour la session.
 
 ## Fonctionnement de `SURVEIL`
 
@@ -160,7 +192,8 @@ en `A_VERIFIER`.
 **Traiter un `A_VERIFIER`** : contrôler la proposition (menu, choix 5), puis cliquer sur **Reporter le SIREN**
 (dans la liste ou dans le détail). Après confirmation, le SIREN proposé est écrit dans `DebSiren.dbf` :
 
-* la fiche est celle notée lors du traitement (`DEB_RECNO`) si son CA correspond, sinon la première fiche de ce CA sans SIREN ;
+* la fiche est celle notée lors du traitement (`DEB_RECNO`) si son CA correspond, sinon la première fiche de ce CA
+  sans SIREN, retrouvée par le tag d'index du CA ;
 * un SIREN déjà renseigné n'est jamais écrasé ;
 * la fiche est verrouillée le temps de l'écriture (si un autre programme l'utilise, rien n'est écrit) ;
 * une ligne `REPORTE` est ajoutée au suivi : le débiteur sort de la liste. L'action est aussi notée dans le journal.
