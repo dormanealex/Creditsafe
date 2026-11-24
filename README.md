@@ -35,7 +35,7 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
 | 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
 | 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
-| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN** |
+| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Clic sur une ligne : détail, débiteur et société proposée côte à côte, avec la 2ᵉ société trouvée. Boutons **< Précédent** / **Suivant >** (ou flèches, PgUp/PgDn), **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN**. Après un report ou un rejet depuis le détail, le débiteur suivant s'affiche |
 | 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
 | 7 | **Séries à traiter** (ex. `ABC,DEF` ; vide = tout le fichier), **pour la session seulement** |
 | 8 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |

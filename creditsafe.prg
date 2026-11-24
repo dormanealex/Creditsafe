@@ -590,7 +590,11 @@ STATIC PROCEDURE CfgSession( cSection, cCle, cVal )
 STATIC PROCEDURE ListeAVerifier()
 
    LOCAL aListe, nPos := 1, oB, nTouche, aPos, lFin := .F., cMsg := "", lRelire := .T., lFond := .T.
-   LOCAL aBoutons := { "Detail", "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Actualiser", "Retour au menu" }
+   /* libelles courts si l'ecran fait moins de 132 colonnes (repli console) */
+   LOCAL aBoutons := iif( MaxCol() >= 131, ;
+                          { "Detail", "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Actualiser", "Retour au menu" }, ;
+                          { "Detail", "Reporter", "Rejeter", "Copier", "Actualiser", "Menu" } )
+   LOCAL nDet
    LOCAL nGarde := 0
    LOCAL nNoteMin := Val( Cfg( "RECHERCHE", "SCORE_AUTO", "80" ) ) - 15
 
@@ -639,8 +643,9 @@ STATIC PROCEDURE ListeAVerifier()
          lFin := .T.
       CASE nTouche == K_ENTER
          IF oB != NIL
-            IF DetailAVerifier( aListe[ nPos ] )
-               nGarde  := nPos
+            nDet := nPos
+            IF DetailAVerifier( aListe, @nDet ) .OR. nDet != nPos
+               nGarde  := nDet         /* la liste se replace sur le dernier debiteur consulte */
                lRelire := .T.
             ENDIF
             lFond := .T.
@@ -649,8 +654,9 @@ STATIC PROCEDURE ListeAVerifier()
          IF oB != NIL .AND. LigneSouris( oB, Len( aListe ), @nPos )
             /* clic sur une ligne : on s'y place et on ouvre le detail */
             oB:forceStable()
-            IF DetailAVerifier( aListe[ nPos ] )
-               nGarde  := nPos
+            nDet := nPos
+            IF DetailAVerifier( aListe, @nDet ) .OR. nDet != nPos
+               nGarde  := nDet
                lRelire := .T.
             ENDIF
             lFond := .T.
@@ -658,8 +664,9 @@ STATIC PROCEDURE ListeAVerifier()
             SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
             CASE 1
                IF oB != NIL
-                  IF DetailAVerifier( aListe[ nPos ] )
-                     nGarde  := nPos
+                  nDet := nPos
+                  IF DetailAVerifier( aListe, @nDet ) .OR. nDet != nPos
+                     nGarde  := nDet
                      lRelire := .T.
                   ENDIF
                   lFond := .T.
@@ -872,17 +879,26 @@ STATIC FUNCTION ChampSuivi( cChamp )
 
    RETURN iif( HB_ISSTRING( x ), AllTrim( x ), x )
 
-/* Detail d'un debiteur a verifier. Renvoie .T. si la proposition a ete traitee
-   (SIREN reporte ou proposition rejetee) : la liste doit etre relue. */
-STATIC FUNCTION DetailAVerifier( h )
+/* Detail des debiteurs a verifier, a partir de aListe[ nInd ], avec navigation precedent / suivant.
+   Un debiteur traite (SIREN reporte ou proposition rejetee) est retire de aListe et le suivant s'affiche.
+   nInd (par reference) : dernier debiteur consulte. Renvoie .T. si au moins une proposition a ete traitee
+   (la liste doit etre relue). */
+STATIC FUNCTION DetailAVerifier( aListe, nInd )
 
-   LOCAL aBoutons := { "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Retour a la liste" }, aPos, nTouche, lFin := .F.
-   LOCAL cMsg := h[ "MESSAGE" ], nP, lReporte := .F.
+   LOCAL aBoutons := iif( MaxCol() >= 131, ;
+                          { "< Precedent", "Suivant >", "Reporter le SIREN", "Rejeter", "Copier le SIREN", "Retour a la liste" }, ;
+                          { "<", ">", "Reporter", "Rejeter", "Copier", "Liste" } )
+   LOCAL aPos, nTouche, lFin := .F., h, cMsg, nP, lReporte := .F., nAction
 
-   DO WHILE ! lFin .AND. ! s_lFermer
+   DO WHILE ! lFin .AND. ! s_lFermer .AND. ! Empty( aListe )
+      nInd := Max( 1, Min( nInd, Len( aListe ) ) )
+      h    := aListe[ nInd ]
+      cMsg := h[ "MESSAGE" ]
+      DispBegin()
       SetColor( COUL_FOND )
       CLS
-      @ 0, 0 SAY PadC( "DEBITEUR A VERIFIER  -  " + h[ "MODE" ] + ", traite le " + DToC( h[ "DATE_TRT" ] ), MaxCol() + 1 ) COLOR COUL_TITRE
+      @ 0, 0 SAY PadC( "DEBITEUR A VERIFIER " + hb_ntos( nInd ) + " / " + hb_ntos( Len( aListe ) ) + ;
+                       "  -  " + h[ "MODE" ] + ", traite le " + DToC( h[ "DATE_TRT" ] ), MaxCol() + 1 ) COLOR COUL_TITRE
 
       IF MaxCol() >= 131
          DetailLarge( h, cMsg )
@@ -918,38 +934,60 @@ STATIC FUNCTION DetailAVerifier( h )
          ENDIF
 
          @ 20, 2 SAY "Bonne societe : Reporter le SIREN.  Mauvaise societe : Rejeter."
-         @ 21, 2 SAY "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
+         @ 21, 2 SAY "< et > (ou fleches, PgUp/PgDn) : debiteur precedent / suivant."
       ENDIF
       aPos := DessineBoutons( aBoutons, LIG_BOUTONS + 1 )
+      DispEnd()
 
       nTouche := Inkey( 0, INKEY_KEYBOARD + INKEY_LDOWN + HB_INKEY_GTEVENT )
+      nAction := 0
       DO CASE
       CASE nTouche == HB_K_CLOSE
          s_lFermer := .T.
       CASE nTouche == K_ESC .OR. nTouche == K_ENTER
          lFin := .T.
+      CASE nTouche == K_LEFT .OR. nTouche == K_UP .OR. nTouche == K_PGUP
+         nAction := 1
+      CASE nTouche == K_RIGHT .OR. nTouche == K_DOWN .OR. nTouche == K_PGDN
+         nAction := 2
+      CASE nTouche == K_HOME
+         nInd := 1
+      CASE nTouche == K_END
+         nInd := Len( aListe )
       CASE nTouche == K_LBUTTONDOWN .OR. nTouche == K_LDBLCLK
-         SWITCH BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
-         CASE 1
-            IF ReporteSiren( h )
-               lReporte := .T.
-               lFin := .T.             /* retour a la liste, qui sera relue */
-            ENDIF
-            EXIT
-         CASE 2
-            IF RejetteProposition( h )
-               lReporte := .T.
-               lFin := .T.
-            ENDIF
-            EXIT
-         CASE 3
-            CopieSiren( h )
-            EXIT
-         CASE 4
-            lFin := .T.
-            EXIT
-         ENDSWITCH
+         nAction := BoutonClique( aBoutons, aPos, LIG_BOUTONS + 1 )
       ENDCASE
+
+      SWITCH nAction
+      CASE 1                         /* precedent */
+         IF nInd > 1
+            nInd--
+         ENDIF
+         EXIT
+      CASE 2                         /* suivant */
+         IF nInd < Len( aListe )
+            nInd++
+         ENDIF
+         EXIT
+      CASE 3                         /* reporter : le debiteur sort de la liste, on affiche le suivant */
+         IF ReporteSiren( h )
+            lReporte := .T.
+            hb_ADel( aListe, nInd, .T. )
+         ENDIF
+         EXIT
+      CASE 4                         /* rejeter : idem */
+         IF RejetteProposition( h )
+            lReporte := .T.
+            hb_ADel( aListe, nInd, .T. )
+         ENDIF
+         EXIT
+      CASE 5
+         CopieSiren( h )
+         EXIT
+      CASE 6
+         lFin := .T.
+         EXIT
+      ENDSWITCH
    ENDDO
 
    RETURN lReporte
@@ -988,8 +1026,9 @@ STATIC PROCEDURE DetailLarge( h, cMsg )
       @ 12, 3 SAY SubStr( cMsg, MaxCol() - 4, MaxCol() - 5 )
    ENDIF
 
-   @ 16, 2 SAY "Bonne societe : Reporter le SIREN (ecrit dans le fichier des debiteurs).  Mauvaise societe : Rejeter. " + ;
-               "Au prochain passage, le debiteur sera mis en surveillance par son SIREN."
+   @ 16, 2 SAY "Bonne societe    : Reporter le SIREN (ecrit dans le fichier des debiteurs, surveillance au prochain passage)."
+   @ 17, 2 SAY "Mauvaise societe : Rejeter (le debiteur ne sera plus recherche par son nom)."
+   @ 18, 2 SAY "< Precedent / Suivant > (ou fleches, PgUp/PgDn) : debiteur precedent / suivant de la liste."
 
    RETURN
 
