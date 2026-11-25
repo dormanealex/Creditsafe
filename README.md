@@ -32,14 +32,15 @@ le programme ouvre le menu et attend qu'on appuie sur une touche.
 | Choix | Fonction |
 |---|---|
 | 1 | Tester la connexion Creditsafe (comme `creditsafe TEST`) |
-| 2 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
-| 3 | Récupérer les alertes (comme `creditsafe ALERTES`) |
-| 4 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
-| 5 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Colonne **Confiance** : note et barre colorée (vert = forte, au moins `SCORE_AUTO` ; jaune = moyenne, de `SCORE_AUTO` − 15 à `SCORE_AUTO` − 1 ; rouge = faible). Clic sur une ligne : détail, débiteur et société proposée côte à côte, **jauge de confiance** (niveau en clair et repère du seuil de surveillance automatique), avec la 2ᵉ société trouvée. Boutons **< Précédent** / **Suivant >** (ou flèches, PgUp/PgDn), **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN**. Après un report ou un rejet depuis le détail, le débiteur suivant s'affiche |
-| 6 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
-| 7 | **Séries à traiter** (ex. `ABC,DEF` ; vide = tout le fichier), **pour la session seulement** |
-| 8 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
-| 9 | Modifier les paramètres dans le Bloc-notes, puis les recharger |
+| 2 | **Séries à traiter** (ex. `ABC,DEF` ; vide = tout le fichier), **pour la session seulement** |
+| 3 | Mettre en surveillance les débiteurs (comme `creditsafe SURVEIL`). En mode réel, une confirmation est demandée |
+| 4 | Récupérer les alertes (comme `creditsafe ALERTES`) |
+| 5 | Bilan du fichier de suivi : nombre de débiteurs par statut (dernier traitement de chacun), en réel et en simulation |
+| 6 | **Débiteurs à vérifier** : liste (TBrowse) des `A_VERIFIER` au dernier traitement de chaque débiteur : CA, débiteur, CP, ville, société proposée, sa ville, SIREN, note (en jaune si faible ; lignes de simulation en cyan). Molette, flèches, PgUp/PgDn. Colonne **Confiance** : note et barre colorée (vert = forte, au moins `SCORE_AUTO` ; jaune = moyenne, de `SCORE_AUTO` − 15 à `SCORE_AUTO` − 1 ; rouge = faible). Clic sur une ligne : détail, débiteur et société proposée côte à côte, **jauge de confiance** (niveau en clair et repère du seuil de surveillance automatique), avec la 2ᵉ société trouvée. Boutons **< Précédent** / **Suivant >** (ou flèches, PgUp/PgDn), **Reporter le SIREN**, **Rejeter** (voir plus bas) et **Copier le SIREN**. Après un report ou un rejet depuis le détail, le débiteur suivant s'affiche |
+| 7 | **Sociétés sous surveillance** : sociétés des portefeuilles `DEBITEURS-...` lues chez Creditsafe, complétées par le suivi (CA, débiteur, ville, date d'ajout). Si Creditsafe est injoignable, liste du suivi (ajouts en mode réel), avec un avertissement. Bouton **Copier le SIREN** |
+| 8 | Passer en mode réel ou en simulation, **pour la session seulement** (confirmation pour passer en réel) |
+| 9 | Nombre maximum de débiteurs à traiter, **pour la session seulement** |
+| P | Modifier les paramètres dans le Bloc-notes, puis les recharger |
 | J | Consulter le journal dans le Bloc-notes |
 | 0 | Quitter (ou Échap) |
 
@@ -55,8 +56,9 @@ Le menu s'ouvre dans une **fenêtre Windows** (GTWVT, fourni avec Harbour) et se
 Lancé par double-clic, le programme ferme la console vide ouverte par Windows. Les lancements avec argument
 (`SURVEIL`, `ALERTES`, `TEST`, donc les tâches planifiées) restent en console, sans fenêtre.
 
-Au clavier, on choisit avec les flèches et Entrée, ou en tapant le chiffre. Les choix 6, 7 et 8 ne modifient pas le fichier `.ini` :
-ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on recharge les paramètres (choix 9).
+Au clavier, on choisit avec les flèches et Entrée, ou en tapant le chiffre (ou la lettre). Les choix 2, 8 et 9 ne
+modifient pas le fichier `.ini` : ils sont signalés « modifié pour cette session » et sont perdus à la sortie, ou quand on
+recharge les paramètres (choix P).
 
 ## Compilation (Windows)
 
@@ -115,7 +117,7 @@ TAG_CA=CA
 * Le `FILTRE` (ex. `TYPDEB=="PROF"`) s'applique en plus.
 * Les **portefeuilles** Creditsafe restent regroupés par les **2** premières lettres du CA.
 * Le suivi, la liste des débiteurs à vérifier et le bilan portent toujours sur tout le suivi.
-* Dans le menu, le choix **7. Séries à traiter** modifie les séries pour la session.
+* Dans le menu, le choix **2. Séries à traiter** modifie les séries pour la session.
 * **Dernières séries traitées** : à chaque mise en surveillance lancée depuis le menu, les séries sont enregistrées
   dans `creditsafe.etat` (à côté du `.ini`, non versionné). Le menu les reprend à l'ouverture suivante
   (« [derniere serie traitee le …] » dans l'en-tête). Les séries passées en argument restent prioritaires.
@@ -194,7 +196,7 @@ Pour le nom, `NOM=RS|NOM` prend le premier champ non vide : la raison sociale, s
 Sans code postal, la note ne peut pas atteindre 80 : un débiteur identifié par sa seule ville part donc toujours
 en `A_VERIFIER`.
 
-**Traiter un `A_VERIFIER`** : contrôler la proposition (menu, choix 5), puis cliquer sur **Reporter le SIREN**
+**Traiter un `A_VERIFIER`** : contrôler la proposition (menu, choix 6), puis cliquer sur **Reporter le SIREN**
 (dans la liste ou dans le détail). Après confirmation, le SIREN proposé est écrit dans `DebSiren.dbf` :
 
 * la fiche est celle notée lors du traitement (`DEB_RECNO`) si son CA correspond, sinon la première fiche de ce CA
